@@ -56,11 +56,12 @@ tyro = ">=0.8.11,<0.9"
 icecream = ">=2.1.3,<3"
 
 [tool.pixi.tasks]
-post-install = '''sed -i 's/p_view\.z <= 0\.2f/p_view\.z <= 0.001f/' submodules/diff-gaussian-rasterization/cuda_rasterizer/auxiliary.h'''
+post-install = { cmd = "pwd", depends_on = ["_download_ckpt"] }
+_modify_rasterizer = { cmd = '''sed -i 's/p_view\.z <= 0\.2f/p_view\.z <= 0.001f/' submodules/diff-gaussian-rasterization/cuda_rasterizer/auxiliary.h''' }
 _get-poses-example = { cmd = """python coarse_init_infer.py --img_base_path data/custom/food --n_views 3 --focal_avg""" }
 _train-example = { cmd = """python train_joint.py -s data/custom/food -m output/food300/ --n_views 3 --scene food --iter 300 --optim_pose""" }
 
-[tool.pixi.tasks._download_replica_big]
+[tool.pixi.tasks._download_ckpt]
 cmd = """
 test -e "checkpoints/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth"
 || (

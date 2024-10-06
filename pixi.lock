@@ -3307,7 +3307,7 @@ packages:
   name: instant-splat
   version: 0.1.0
   path: .
-  sha256: e8515cde409f73316fb371c0539def7bcda980d8f3cd50375205531fd682809c
+  sha256: 540dd6d7054de938c96b5ed34df3e24dae0ba4d4b85ef20077201dccb95bcd4e
   requires_dist:
   - build>=1.2.2.post1,<2
   - mini-dust3r>=0.1.1,<0.2
