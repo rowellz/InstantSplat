@@ -17,8 +17,6 @@ from instant_splat.scene.colmap_loader import (
     read_extrinsics_text,
     read_intrinsics_text,
     qvec2rotmat,
-    read_extrinsics_binary,
-    read_intrinsics_binary,
     read_points3D_binary,
     read_points3D_text,
 )
@@ -29,6 +27,14 @@ from pathlib import Path
 from plyfile import PlyData, PlyElement
 from instant_splat.utils.sh_utils import SH2RGB
 from instant_splat.scene.gaussian_model import BasicPointCloud
+
+try:
+    from pillow_heif import register_heif_opener  # noqa
+
+    register_heif_opener()
+    heif_support_enabled = True
+except ImportError:
+    heif_support_enabled = False
 
 
 class CameraInfo(NamedTuple):

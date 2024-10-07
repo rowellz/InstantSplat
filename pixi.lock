@@ -470,11 +470,14 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/c9/fb/108ecd1fe961941959ad0ee4e12ee7b8b1477247f30b1fdfd83ceaf017f0/jupyter_core-5.7.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/cf/d4/12915eb3083dfd1746d50b71b73334030b129cd25abbed9133dd2d413c21/lz4-4.3.3-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/87/57/80116bef356054321bde3eb858f32e1c2ac6761d34f85b7662dce95f8114/mini_dust3r-0.1.1-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/59/bd/5d468c171f201d6169bec848d1116e95736854eec72307299bc68939fe45/mmcv_lite-2.2.0-py2.py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/52/25/f36666310ab14b3c301857965920b1faae5e6b15bc8476d8218f125bc7d1/mmengine-0.10.5-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/ef/82/7a9d0550484a62c6da82858ee9419f3dd1ccc9aa1c26a1e43da3ecd20b0d/natsort-8.4.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a9/82/0340caa499416c78e5d8f5f05947ae4bc3cba53c9f038ab6e9ed964e22f1/nbformat-5.10.4-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a0/c4/c2971a3ba4c6103a3d10c4b0f24f461ddc027f0f09763220cf35ca1401b3/nest_asyncio-1.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/2f/b3/55ac60a4003fcc6013ef87a3c97fd7811c5662cb1c19ea438c03601c3d8f/numexpr-2.10.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/5c/ba/a4c5986951344f804b5cbd86f0a87d9ea5969e8d13f1e8913e2d8276e0d8/open3d-0.18.0-cp311-cp311-manylinux_2_27_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/2a/4e/8de02c206f2b850b3df14e159223b8419a6b657e0bf3169aedaee788a067/pillow_heif-0.18.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/3c/a6/bc1012356d8ece4d66dd75c4b9fc6c1f6650ddd5991e421177d9f8f671be/platformdirs-4.3.6-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/e5/ae/580600f441f6fc05218bd6c9d5794f4aef072a7d9093b291f1c50a9db8bc/plotly-5.24.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/19/74/f59e7e0d392bc1070e9a70e2f9190d652487ac115bb16e2eff6b22ad1d24/psutil-6.0.0-cp36-abi3-manylinux_2_12_x86_64.manylinux2010_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl
@@ -493,7 +496,9 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/83/11/00d3c3dfc25ad54e731d91449895a79e4bf2384dc3ac01809010ba88f6d5/seaborn-0.13.2-py3-none-any.whl
       - pypi: direct+https://huggingface.co/datasets/pablovela5620/instantsplat/resolve/main/simple_knn-0.1.0%2Bpt231cu118-cp311-cp311-linux_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/b6/cb/b86984bed139586d01532a587464b5805f12e397594f19f931c4c2fbfa61/tenacity-9.0.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/7f/be/df630c387a0a054815d60be6a97eb4e8f17385d5d6fe660e1c02750062b4/termcolor-2.5.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/4b/2c/ffbf7a134b9ab11a67b0cf0726453cedd9c5043a4fe7a35d1cefa9a1bcfb/threadpoolctl-3.5.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/66/c9/d4b03b2490107f13ebd68fe9496d41ae41a7de6275ead56d0d4621b11ffd/yapf-0.40.2-py3-none-any.whl
       - pypi: .
 packages:
 - kind: conda
@@ -3307,10 +3312,12 @@ packages:
   name: instant-splat
   version: 0.1.0
   path: .
-  sha256: 540dd6d7054de938c96b5ed34df3e24dae0ba4d4b85ef20077201dccb95bcd4e
+  sha256: 3c4c5ccb4c5ea8c3608a9d1aca590ffac23e16160aea079e3430edfc53452816
   requires_dist:
   - build>=1.2.2.post1,<2
   - mini-dust3r>=0.1.1,<0.2
+  - mmcv-lite>=2.2.0,<3
+  - pillow-heif>=0.18.0,<0.19
   requires_python: '>=3.11'
   editable: true
 - kind: conda
@@ -5981,6 +5988,104 @@ packages:
   purls: []
   size: 762563
   timestamp: 1652946186347
+- kind: pypi
+  name: mmcv-lite
+  version: 2.2.0
+  url: https://files.pythonhosted.org/packages/59/bd/5d468c171f201d6169bec848d1116e95736854eec72307299bc68939fe45/mmcv_lite-2.2.0-py2.py3-none-any.whl
+  sha256: a24ee8dd3df7556dfced282dbfe8c3f87df6de2d4dcaf1207e83e9a2d58455a6
+  requires_dist:
+  - addict
+  - mmengine>=0.3.0
+  - numpy
+  - packaging
+  - pillow
+  - pyyaml
+  - yapf
+  - opencv-python>=3
+  - regex ; sys_platform == 'win32'
+  - pytest-runner ; extra == 'all'
+  - ninja ; extra == 'all'
+  - psutil ; extra == 'all'
+  - addict ; extra == 'all'
+  - mmengine>=0.3.0 ; extra == 'all'
+  - numpy ; extra == 'all'
+  - packaging ; extra == 'all'
+  - pillow ; extra == 'all'
+  - pyyaml ; extra == 'all'
+  - yapf ; extra == 'all'
+  - coverage ; extra == 'all'
+  - lmdb ; extra == 'all'
+  - onnx ; extra == 'all'
+  - onnxoptimizer ; extra == 'all'
+  - onnxruntime ; extra == 'all'
+  - pytest ; extra == 'all'
+  - pyturbojpeg ; extra == 'all'
+  - scipy ; extra == 'all'
+  - tifffile ; extra == 'all'
+  - regex ; sys_platform == 'win32' and extra == 'all'
+  - pytest-runner ; extra == 'build'
+  - ninja ; extra == 'optional'
+  - psutil ; extra == 'optional'
+  - coverage ; extra == 'tests'
+  - lmdb ; extra == 'tests'
+  - onnx ; extra == 'tests'
+  - onnxoptimizer ; extra == 'tests'
+  - onnxruntime ; extra == 'tests'
+  - pytest ; extra == 'tests'
+  - pyturbojpeg ; extra == 'tests'
+  - scipy ; extra == 'tests'
+  - tifffile ; extra == 'tests'
+  requires_python: '>=3.7'
+- kind: pypi
+  name: mmengine
+  version: 0.10.5
+  url: https://files.pythonhosted.org/packages/52/25/f36666310ab14b3c301857965920b1faae5e6b15bc8476d8218f125bc7d1/mmengine-0.10.5-py3-none-any.whl
+  sha256: 7c204dde312008a8a1afa09437408fde00675d326c73bcaac688c46dfb633cad
+  requires_dist:
+  - addict
+  - matplotlib
+  - numpy
+  - pyyaml
+  - rich
+  - termcolor
+  - yapf
+  - opencv-python>=3
+  - regex ; sys_platform == 'win32'
+  - addict ; extra == 'all'
+  - matplotlib ; extra == 'all'
+  - numpy ; extra == 'all'
+  - pyyaml ; extra == 'all'
+  - rich ; extra == 'all'
+  - termcolor ; extra == 'all'
+  - yapf ; extra == 'all'
+  - bitsandbytes ; extra == 'all'
+  - clearml ; extra == 'all'
+  - coverage ; extra == 'all'
+  - dadaptation ; extra == 'all'
+  - dvclive ; extra == 'all'
+  - lion-pytorch ; extra == 'all'
+  - lmdb ; extra == 'all'
+  - mlflow ; extra == 'all'
+  - parameterized ; extra == 'all'
+  - pydantic==1.10.9 ; extra == 'all'
+  - pytest ; extra == 'all'
+  - transformers ; extra == 'all'
+  - aim<=3.17.5 ; sys_platform != 'win32' and extra == 'all'
+  - regex ; sys_platform == 'win32' and extra == 'all'
+  - bitsandbytes ; extra == 'tests'
+  - clearml ; extra == 'tests'
+  - coverage ; extra == 'tests'
+  - dadaptation ; extra == 'tests'
+  - dvclive ; extra == 'tests'
+  - lion-pytorch ; extra == 'tests'
+  - lmdb ; extra == 'tests'
+  - mlflow ; extra == 'tests'
+  - parameterized ; extra == 'tests'
+  - pydantic==1.10.9 ; extra == 'tests'
+  - pytest ; extra == 'tests'
+  - transformers ; extra == 'tests'
+  - aim<=3.17.5 ; sys_platform != 'win32' and extra == 'tests'
+  requires_python: '>=3.7'
 - kind: conda
   name: mpc
   version: 1.3.1
@@ -6583,6 +6688,34 @@ packages:
   - pkg:pypi/pillow?source=hash-mapping
   size: 42600867
   timestamp: 1712154582003
+- kind: pypi
+  name: pillow-heif
+  version: 0.18.0
+  url: https://files.pythonhosted.org/packages/2a/4e/8de02c206f2b850b3df14e159223b8419a6b657e0bf3169aedaee788a067/pillow_heif-0.18.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+  sha256: b8782f9f82c534f4a37ce3c609505f992f340a495da1247951108218a201d0e9
+  requires_dist:
+  - pillow>=10.1.0
+  - pytest ; extra == 'dev'
+  - defusedxml ; extra == 'dev'
+  - packaging ; extra == 'dev'
+  - numpy ; extra == 'dev'
+  - pympler ; extra == 'dev'
+  - opencv-python==4.10.0.84 ; extra == 'dev'
+  - pre-commit ; extra == 'dev'
+  - pylint ; extra == 'dev'
+  - coverage ; extra == 'dev'
+  - sphinx>=4.4 ; extra == 'docs'
+  - sphinx-issues>=3.0.1 ; extra == 'docs'
+  - sphinx-rtd-theme>=1.0 ; extra == 'docs'
+  - pytest ; extra == 'tests'
+  - defusedxml ; extra == 'tests'
+  - packaging ; extra == 'tests'
+  - numpy ; extra == 'tests'
+  - pympler ; extra == 'tests'
+  - pytest ; extra == 'tests-min'
+  - defusedxml ; extra == 'tests-min'
+  - packaging ; extra == 'tests-min'
+  requires_python: '>=3.8'
 - kind: conda
   name: pip
   version: '24.2'
@@ -8155,6 +8288,15 @@ packages:
   size: 4781039
   timestamp: 1695425916767
 - kind: pypi
+  name: termcolor
+  version: 2.5.0
+  url: https://files.pythonhosted.org/packages/7f/be/df630c387a0a054815d60be6a97eb4e8f17385d5d6fe660e1c02750062b4/termcolor-2.5.0-py3-none-any.whl
+  sha256: 37b17b5fc1e604945c2642c872a3764b5d547a48009871aea3edd3afa180afb8
+  requires_dist:
+  - pytest ; extra == 'tests'
+  - pytest-cov ; extra == 'tests'
+  requires_python: '>=3.9'
+- kind: pypi
   name: threadpoolctl
   version: 3.5.0
   url: https://files.pythonhosted.org/packages/4b/2c/ffbf7a134b9ab11a67b0cf0726453cedd9c5043a4fe7a35d1cefa9a1bcfb/threadpoolctl-3.5.0-py3-none-any.whl
@@ -9172,6 +9314,16 @@ packages:
   purls: []
   size: 89141
   timestamp: 1641346969816
+- kind: pypi
+  name: yapf
+  version: 0.40.2
+  url: https://files.pythonhosted.org/packages/66/c9/d4b03b2490107f13ebd68fe9496d41ae41a7de6275ead56d0d4621b11ffd/yapf-0.40.2-py3-none-any.whl
+  sha256: adc8b5dd02c0143108878c499284205adb258aad6db6634e5b869e7ee2bd548b
+  requires_dist:
+  - importlib-metadata>=6.6.0
+  - platformdirs>=3.5.1
+  - tomli>=2.0.1
+  requires_python: '>=3.7'
 - kind: conda
   name: zipp
   version: 3.20.2
