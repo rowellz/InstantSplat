@@ -10,32 +10,34 @@
 #
 
 import torch
-from scene import Scene
+from instant_splat.scene import Scene
 import os
 from tqdm import tqdm
 from os import makedirs
-from gaussian_renderer import render
+from instant_splat.gaussian_renderer import render
 import torchvision
-from utils.general_utils import safe_state
+from instant_splat.utils.general_utils import safe_state
 from argparse import ArgumentParser
 from arguments import ModelParams, PipelineParams, get_combined_args
-from gaussian_renderer import GaussianModel
-from utils.pose_utils import get_tensor_from_camera
-from utils.camera_utils import generate_interpolated_path
-from utils.camera_utils import visualizer
-import cv2
+from instant_splat.gaussian_renderer import GaussianModel
+from instant_splat.utils.pose_utils import get_tensor_from_camera
+from instant_splat.utils.camera_utils import generate_interpolated_path
+from instant_splat.utils.camera_utils import visualizer
 import numpy as np
 import imageio
 
 
 def save_interpolate_pose(model_path, iter, n_views):
-
     org_pose = np.load(model_path + f"pose/pose_{iter}.npy")
-    visualizer(org_pose, ["green" for _ in org_pose], model_path + "pose/poses_optimized.png")
+    visualizer(
+        org_pose, ["green" for _ in org_pose], model_path + "pose/poses_optimized.png"
+    )
     n_interp = int(10 * 30 / n_views)  # 10second, fps=30
     all_inter_pose = []
-    for i in range(n_views-1):
-        tmp_inter_pose = generate_interpolated_path(poses=org_pose[i:i+2], n_interp=n_interp)
+    for i in range(n_views - 1):
+        tmp_inter_pose = generate_interpolated_path(
+            poses=org_pose[i : i + 2], n_interp=n_interp
+        )
         all_inter_pose.append(tmp_inter_pose)
     all_inter_pose = np.array(all_inter_pose).reshape(-1, 3, 4)
 
@@ -46,7 +48,11 @@ def save_interpolate_pose(model_path, iter, n_views):
         tmp_view[:3, 3] = p[:3, 3]
         inter_pose_list.append(tmp_view)
     inter_pose = np.stack(inter_pose_list, 0)
-    visualizer(inter_pose, ["blue" for _ in inter_pose], model_path + "pose/poses_interpolated.png")
+    visualizer(
+        inter_pose,
+        ["blue" for _ in inter_pose],
+        model_path + "pose/poses_interpolated.png",
+    )
     np.save(model_path + "pose/pose_interpolated.npy", inter_pose)
 
 
@@ -62,7 +68,7 @@ def images_to_video(image_folder, output_video_path, fps=30):
     images = []
 
     for filename in sorted(os.listdir(image_folder)):
-        if filename.endswith(('.png', '.jpg', '.jpeg', '.JPG', '.PNG')):
+        if filename.endswith((".png", ".jpg", ".jpeg", ".JPG", ".PNG")):
             image_path = os.path.join(image_folder, filename)
             image = imageio.imread(image_path)
             images.append(image)
@@ -93,13 +99,14 @@ def render_sets(
     skip_test: bool,
     args,
 ):
-
     # Applying interpolation
     save_interpolate_pose(dataset.model_path, iteration, args.n_views)
 
     with torch.no_grad():
         gaussians = GaussianModel(dataset.sh_degree)
-        scene = Scene(dataset, gaussians, load_iteration=iteration, opt=args, shuffle=False)
+        scene = Scene(
+            dataset, gaussians, load_iteration=iteration, opt=args, shuffle=False
+        )
 
         bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
@@ -116,8 +123,12 @@ def render_sets(
     )
 
     if args.get_video:
-        image_folder = os.path.join(dataset.model_path, f'interp/ours_{args.iteration}/renders')
-        output_video_file = os.path.join(dataset.model_path, f'{args.scene}_{args.n_views}_view.mp4')
+        image_folder = os.path.join(
+            dataset.model_path, f"interp/ours_{args.iteration}/renders"
+        )
+        output_video_file = os.path.join(
+            dataset.model_path, f"{args.scene}_{args.n_views}_view.mp4"
+        )
         images_to_video(image_folder, output_video_file, fps=30)
 
 

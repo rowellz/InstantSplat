@@ -13,6 +13,7 @@ import os
 import numpy as np
 import torch
 import rerun as rr
+import rerun.blueprint as rrb
 from random import randint
 from instant_splat.scene.cameras import Camera
 from instant_splat.utils.loss_utils import l1_loss, ssim
@@ -30,12 +31,9 @@ from torch import Tensor
 from jaxtyping import Float32
 from typing import Any
 from pathlib import Path
-from icecream import ic
 
 
 from time import perf_counter
-
-TENSORBOARD_FOUND = False
 
 
 def save_pose(path, quat_pose, train_cams, llffhold=2):
@@ -54,14 +52,10 @@ def save_pose(path, quat_pose, train_cams, llffhold=2):
     np.save(path, colmap_poses)
 
 
-def log_3d_splats(parent_log_path: Path, gaussians: GaussianModel):
-    rr.log(f"{parent_log_path}", rr.ViewCoordinates.RDF, static=True)
+def log_3d_splats(parent_log_path: Path, gaussians: GaussianModel) -> None:
     initial_gaussians: Float32[Tensor, "num_gaussians 3"] = gaussians.get_xyz
-    scales = gaussians.get_scaling
-    rotations = gaussians.get_rotation
     colors: Float32[Tensor, "num_gaussians 3"] = SH2RGB(gaussians.get_features)[:, 0, :]
-    ic(scales.shape, scales.dtype)
-    ic(rotations.shape, rotations.dtype)
+
     # get only the first 10 gaussians
     rr.log(
         f"{parent_log_path}/gaussian_points",
@@ -70,6 +64,10 @@ def log_3d_splats(parent_log_path: Path, gaussians: GaussianModel):
             colors=colors.numpy(force=True),
         ),
     )
+    # ic(scales.shape, scales.dtype)
+    # ic(rotations.shape, rotations.dtype)
+    # scales = gaussians.get_scaling
+    # rotations = gaussians.get_rotation
     # rr.log(
     #     f"{parent_log_path}/gaussian_ellipsoids",
     #     rr.Ellipsoids3D(
@@ -80,6 +78,129 @@ def log_3d_splats(parent_log_path: Path, gaussians: GaussianModel):
     #         fill_mode=3,
     #     ),
     # )
+
+
+def log_cameras(
+    parent_log_path: Path,
+    cameras: list[Camera],
+    gaussians: GaussianModel,
+    pipe: PipelineParams,
+    bg: Float32[Tensor, "3"],
+) -> None:
+    cam: Camera
+    for idx, cam in enumerate(cameras):
+        quat_t: Float32[Tensor, "7"] = gaussians.get_RT(cam.uid)
+        w2c: Float32[Tensor, "4 4"] = get_camera_from_tensor(quat_t)
+        cam_T_world: Float32[Tensor, "3 4"] = w2c.numpy(force=True)
+        cam_log_path: Path = parent_log_path / f"camera_{cam.uid}"
+        FoVx = cam.FoVx
+        FoVy = cam.FoVy
+        # convert to principal point and focal length
+        fx = cam.image_width / (2 * np.tan(FoVx / 2))
+        fy = cam.image_height / (2 * np.tan(FoVy / 2))
+        principal_point = (cam.image_width / 2, cam.image_height / 2)
+
+        img_gt_viz: Float32[Tensor, "3 h w"] = cam.original_image * 255
+        img_gt_viz: Float32[np.ndarray, "h w 3"] = (
+            img_gt_viz.permute(1, 2, 0).numpy(force=True).astype(np.uint8)
+        )
+
+        render_pkg: dict[str, Any] = render(
+            cam, gaussians, pipe, bg, camera_pose=quat_t
+        )
+        img_pred_viz: Float32[Tensor, "3 h w"] = render_pkg["render"] * 255
+        img_pred_viz: Float32[np.ndarray, "h w 3"] = (
+            img_pred_viz.permute(1, 2, 0).numpy(force=True).astype(np.uint8)
+        )
+
+        rr.log(
+            f"{cam_log_path}",
+            rr.Transform3D(
+                translation=cam_T_world[:3, 3],
+                mat3x3=cam_T_world[:3, :3],
+                from_parent=True,
+                axis_length=0.01,
+            ),
+        )
+        rr.log(
+            f"{cam_log_path}/pinhole",
+            rr.Pinhole(
+                width=cam.image_width,
+                height=cam.image_height,
+                focal_length=(fx, fy),
+                principal_point=principal_point,
+                camera_xyz=rr.ViewCoordinates.RDF,
+                image_plane_distance=0.01,
+            ),
+        )
+        # only log the first three cameras images for efficiency
+        if idx > 2:
+            continue
+        rr.log(f"{cam_log_path}/pinhole/image", rr.Image(img_pred_viz))
+        # log outside of camera to avoid cluttering the view
+        rr.log(f"{parent_log_path}/gt_image_{cam.uid}", rr.Image(img_gt_viz))
+
+
+def create_blueprint(parent_log_path: Path) -> rrb.Blueprint:
+    blueprint = rrb.Blueprint(
+        rrb.Horizontal(
+            rrb.Spatial3DView(
+                origin=f"{parent_log_path}",
+            ),
+            rrb.Vertical(
+                rrb.TimeSeriesView(
+                    origin=f"{parent_log_path}/loss_plot",
+                ),
+                rrb.Horizontal(
+                    rrb.Spatial2DView(
+                        origin=f"{parent_log_path}/camera_0/pinhole/",
+                        contents="$origin/**",
+                    ),
+                    rrb.Spatial2DView(
+                        origin=f"{parent_log_path}/gt_image_0",
+                    ),
+                ),
+                rrb.Horizontal(
+                    rrb.Spatial2DView(
+                        origin=f"{parent_log_path}/camera_1/pinhole/",
+                        contents="$origin/**",
+                    ),
+                    rrb.Spatial2DView(
+                        origin=f"{parent_log_path}/gt_image_1",
+                    ),
+                ),
+                rrb.Horizontal(
+                    rrb.Spatial2DView(
+                        origin=f"{parent_log_path}/camera_2/pinhole/",
+                        contents="$origin/**",
+                    ),
+                    rrb.Spatial2DView(
+                        origin=f"{parent_log_path}/gt_image_2",
+                    ),
+                ),
+            ),
+        )
+    )
+    return blueprint
+
+
+def prepare_output_and_logger(args):
+    if not args.model_path:
+        if os.getenv("OAR_JOB_ID"):
+            unique_str = os.getenv("OAR_JOB_ID")
+        else:
+            unique_str = str(uuid.uuid4())
+        args.model_path = os.path.join("./output/", unique_str[0:10])
+
+    # Set up output folder
+    print("Output folder: {}".format(args.model_path))
+    os.makedirs(args.model_path, exist_ok=True)
+    with open(os.path.join(args.model_path, "cfg_args"), "w") as cfg_log_f:
+        cfg_log_f.write(str(Namespace(**vars(args))))
+
+    # Create Tensorboard writer
+    tb_writer = None
+    return tb_writer
 
 
 def training(
@@ -94,7 +215,7 @@ def training(
     args: Namespace,
 ):
     first_iter = 0
-    tb_writer = prepare_output_and_logger(dataset)
+    prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
     scene = Scene(dataset, gaussians, opt=args, shuffle=True)
     gaussians.training_setup(opt)
@@ -118,13 +239,20 @@ def training(
     first_iter += 1
 
     start = perf_counter()
+    # Setup rerun logging
     parent_log_path = Path("world")
-
-    # log initial camera positions
+    blueprint: rrb.Blueprint = create_blueprint(parent_log_path)
+    rr.send_blueprint(blueprint)
+    rr.log(f"{parent_log_path}", rr.ViewCoordinates.RDF, static=True)
+    rr.log(
+        f"{parent_log_path}/loss_plot",
+        rr.SeriesLine(color=[255, 0, 0], name="Loss", width=2),
+        static=True,
+    )
 
     for iteration in range(first_iter, opt.iterations + 1):
         iter_start.record()
-        rr.set_time_sequence("Iteration", iteration)
+        rr.set_time_sequence("iteration", iteration)
 
         gaussians.update_learning_rate(iteration)
 
@@ -138,23 +266,11 @@ def training(
         # Pick a random Camera
         if not viewpoint_stack:
             viewpoint_stack: list[Camera] = scene.getTrainCameras().copy()
+
         viewpoint_cam: Camera = viewpoint_stack.pop(
             randint(0, len(viewpoint_stack) - 1)
         )
         pose: Float32[Tensor, "7"] = gaussians.get_RT(viewpoint_cam.uid)
-
-        for idx, quat_t in enumerate(gaussians.P):
-            w2c = get_camera_from_tensor(quat_t)
-            cam_T_world = w2c.numpy(force=True)
-            cam_R_world = cam_T_world[:3, :3]
-            cam_t_world = cam_T_world[:3, 3]
-
-            rr.log(
-                f"{parent_log_path}/camera_{idx}",
-                rr.Transform3D(
-                    translation=cam_t_world, mat3x3=cam_R_world, from_parent=True
-                ),
-            )
 
         # Render
         if (iteration - 1) == debug_from:
@@ -168,31 +284,9 @@ def training(
             viewpoint_cam, gaussians, pipe, bg, camera_pose=pose
         )
         image: Float32[Tensor, "c h w"] = render_pkg["render"]
-        viewspace_point_tensor: Float32[Tensor, "num_gaussians 3"] = render_pkg[
-            "viewspace_points"
-        ]
-        visibility_filter: Float32[Tensor, "num_gaussians"] = render_pkg[  # noqa : F841
-            "visibility_filter"
-        ]
-        radii: Float32[Tensor, "num_gaussians"] = render_pkg["radii"]  # noqa : F841
-
         # Loss
         gt_image: Float32[Tensor, "c h w"] = viewpoint_cam.original_image.cuda()
 
-        img_vis = image.permute(1, 2, 0) * 255
-        rr.log(
-            f"{parent_log_path}/image_{viewpoint_cam.uid}",
-            rr.Image(img_vis.numpy(force=True).astype(np.uint8)).compress(
-                jpeg_quality=50
-            ),
-        )
-        img_gt_vis = gt_image.permute(1, 2, 0) * 255
-        rr.log(
-            f"{parent_log_path}/gt_image_{viewpoint_cam.uid}",
-            rr.Image(img_gt_vis.numpy(force=True).astype(np.uint8)).compress(
-                jpeg_quality=50
-            ),
-        )
         Ll1 = l1_loss(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (
             1.0 - ssim(image, gt_image)
@@ -205,6 +299,10 @@ def training(
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             if iteration % 10 == 0:
+                log_cameras(
+                    parent_log_path, train_cams_init, gaussians, pipe, background
+                )
+                rr.log(f"{parent_log_path}/loss_plot", rr.Scalar(ema_loss_for_log))
                 progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
                 progress_bar.update(10)
             if iteration == opt.iterations:
@@ -212,19 +310,15 @@ def training(
 
             # Log and save
             training_report(
-                tb_writer,
                 iteration,
-                Ll1,
-                loss,
                 l1_loss,
-                iter_start.elapsed_time(iter_end),
                 testing_iterations,
                 scene,
                 render,
                 (pipe, background),
             )
             if iteration in saving_iterations:
-                print("\n[ITER {}] Saving Gaussians".format(iteration))
+                print(f"\n[ITER {iteration}] Saving Gaussians")
                 scene.save(iteration)
                 save_pose(
                     scene.model_path + "pose" + f"/pose_{iteration}.npy",
@@ -248,49 +342,17 @@ def training(
                 )
 
         end = perf_counter()
-        train_time = end - start
-
-
-def prepare_output_and_logger(args):
-    if not args.model_path:
-        if os.getenv("OAR_JOB_ID"):
-            unique_str = os.getenv("OAR_JOB_ID")
-        else:
-            unique_str = str(uuid.uuid4())
-        args.model_path = os.path.join("./output/", unique_str[0:10])
-
-    # Set up output folder
-    print("Output folder: {}".format(args.model_path))
-    os.makedirs(args.model_path, exist_ok=True)
-    with open(os.path.join(args.model_path, "cfg_args"), "w") as cfg_log_f:
-        cfg_log_f.write(str(Namespace(**vars(args))))
-
-    # Create Tensorboard writer
-    tb_writer = None
-    if TENSORBOARD_FOUND:
-        tb_writer = SummaryWriter(args.model_path)
-    else:
-        print("Tensorboard not available: not logging progress")
-    return tb_writer
+        train_time: float = end - start
 
 
 def training_report(
-    tb_writer,
     iteration,
-    Ll1,
-    loss,
     l1_loss,
-    elapsed,
     testing_iterations,
     scene: Scene,
     renderFunc,
     renderArgs,
 ):
-    if tb_writer:
-        tb_writer.add_scalar("train_loss_patches/l1_loss", Ll1.item(), iteration)
-        tb_writer.add_scalar("train_loss_patches/total_loss", loss.item(), iteration)
-        tb_writer.add_scalar("iter_time", elapsed, iteration)
-
     # Report test and samples of training set
     if iteration in testing_iterations:
         torch.cuda.empty_cache()
@@ -324,44 +386,13 @@ def training_report(
                     gt_image = torch.clamp(
                         viewpoint.original_image.to("cuda"), 0.0, 1.0
                     )
-                    if tb_writer and (idx < 5):
-                        tb_writer.add_images(
-                            config["name"]
-                            + "_view_{}/render".format(viewpoint.image_name),
-                            image[None],
-                            global_step=iteration,
-                        )
-                        if iteration == testing_iterations[0]:
-                            tb_writer.add_images(
-                                config["name"]
-                                + "_view_{}/ground_truth".format(viewpoint.image_name),
-                                gt_image[None],
-                                global_step=iteration,
-                            )
                     l1_test += l1_loss(image, gt_image).mean().double()
                     psnr_test += psnr(image, gt_image).mean().double()
                 psnr_test /= len(config["cameras"])
                 l1_test /= len(config["cameras"])
                 print(
-                    "\n[ITER {}] Evaluating {}: L1 {} PSNR {}".format(
-                        iteration, config["name"], l1_test, psnr_test
-                    )
+                    f"\n[ITER {iteration}] Evaluating {config['name']}: L1 {l1_test} PSNR {psnr_test}"
                 )
-                if tb_writer:
-                    tb_writer.add_scalar(
-                        config["name"] + "/loss_viewpoint - l1_loss", l1_test, iteration
-                    )
-                    tb_writer.add_scalar(
-                        config["name"] + "/loss_viewpoint - psnr", psnr_test, iteration
-                    )
-
-        if tb_writer:
-            tb_writer.add_histogram(
-                "scene/opacity_histogram", scene.gaussians.get_opacity, iteration
-            )
-            tb_writer.add_scalar(
-                "total_points", scene.gaussians.get_xyz.shape[0], iteration
-            )
         torch.cuda.empty_cache()
 
 
@@ -379,7 +410,20 @@ if __name__ == "__main__":
         "--test_iterations",
         nargs="+",
         type=int,
-        default=[500, 800, 1000, 1500, 2000, 3000, 4000, 5000, 6000, 7_000, 30_000],
+        default=[
+            300,
+            500,
+            800,
+            1000,
+            1500,
+            2000,
+            3000,
+            4000,
+            5000,
+            6000,
+            7_000,
+            30_000,
+        ],
     )
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--quiet", action="store_true")
@@ -399,11 +443,6 @@ if __name__ == "__main__":
 
     print("Optimizing " + args.model_path)
 
-    # Initialize system state (RNG)
-    # safe_state(args.quiet)
-
-    # Start GUI server, configure and run training
-    # network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
     training(
         lp.extract(args),
