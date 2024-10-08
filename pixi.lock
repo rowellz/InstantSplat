@@ -3312,7 +3312,7 @@ packages:
   name: instant-splat
   version: 0.1.0
   path: .
-  sha256: 3c4c5ccb4c5ea8c3608a9d1aca590ffac23e16160aea079e3430edfc53452816
+  sha256: 4251e01b5e1041b25b84af57a0808117b2d7bb21a4cc0a1f294e083a63cd5396
   requires_dist:
   - build>=1.2.2.post1,<2
   - mini-dust3r>=0.1.1,<0.2

@@ -25,7 +25,12 @@ import uuid
 from tqdm import tqdm
 from instant_splat.utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
-from arguments import ModelParams, PipelineParams, OptimizationParams, GroupParams
+from instant_splat.arguments import (
+    ModelParams,
+    PipelineParams,
+    OptimizationParams,
+    GroupParams,
+)
 from instant_splat.utils.pose_utils import get_camera_from_tensor
 from torch import Tensor
 from jaxtyping import Float32
@@ -179,7 +184,9 @@ def create_blueprint(parent_log_path: Path) -> rrb.Blueprint:
                     ),
                 ),
             ),
-        )
+            column_shares=[2, 1],
+        ),
+        collapse_panels=True,
     )
     return blueprint
 

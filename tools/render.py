@@ -10,17 +10,18 @@
 #
 
 import torch
-from scene import Scene
+from instant_splat.scene import Scene
 import os
 from tqdm import tqdm
 from os import makedirs
-from gaussian_renderer import render
+from instant_splat.gaussian_renderer import render
 import torchvision
-from utils.general_utils import safe_state
+from instant_splat.utils.general_utils import safe_state
 from argparse import ArgumentParser
-from arguments import ModelParams, PipelineParams, get_combined_args
-from gaussian_renderer import GaussianModel
-from utils.pose_utils import get_tensor_from_camera
+from instant_splat.arguments import ModelParams, PipelineParams, get_combined_args
+from instant_splat.gaussian_renderer import GaussianModel
+from instant_splat.utils.pose_utils import get_tensor_from_camera
+
 
 def render_set(model_path, name, iteration, views, gaussians, pipeline, background):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
@@ -42,7 +43,10 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             gt, os.path.join(gts_path, "{0:05d}".format(idx) + ".png")
         )
 
-def render_set_optimize(model_path, name, iteration, views, gaussians, pipeline, background):
+
+def render_set_optimize(
+    model_path, name, iteration, views, gaussians, pipeline, background
+):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
 
@@ -76,7 +80,6 @@ def render_set_optimize(model_path, name, iteration, views, gaussians, pipeline,
             ]
         )
 
-
         progress_bar = tqdm(
             range(num_iter), desc=f"Tracking Time Step: {idx}", disable=True
         )
@@ -87,9 +90,15 @@ def render_set_optimize(model_path, name, iteration, views, gaussians, pipeline,
         current_min_loss = float(1e20)
         gt = view.original_image[0:3, :, :]
         for iteration in range(num_iter):
-            rendering = render(view, gaussians, pipeline, background, camera_pose=torch.cat([camera_tensor_q, camera_tensor_T]))["render"]
+            rendering = render(
+                view,
+                gaussians,
+                pipeline,
+                background,
+                camera_pose=torch.cat([camera_tensor_q, camera_tensor_T]),
+            )["render"]
             loss = torch.abs(gt - rendering).mean()
-            if iteration%10==0:
+            if iteration % 10 == 0:
                 print(iteration, loss.item())
             loss.backward()
 
@@ -112,9 +121,11 @@ def render_set_optimize(model_path, name, iteration, views, gaussians, pipeline,
 
         progress_bar.close()
         opt_pose = torch.cat([camera_tensor_q, camera_tensor_T])
-        print(opt_pose-camera_pose)
-        rendering_opt = render(view, gaussians, pipeline, background, camera_pose=opt_pose)["render"]
-            
+        print(opt_pose - camera_pose)
+        rendering_opt = render(
+            view, gaussians, pipeline, background, camera_pose=opt_pose
+        )["render"]
+
         torchvision.utils.save_image(
             rendering_opt, os.path.join(render_path, "{0:05d}".format(idx) + ".png")
         )
@@ -133,7 +144,9 @@ def render_sets(
 ):
     with torch.no_grad():
         gaussians = GaussianModel(dataset.sh_degree)
-        scene = Scene(dataset, gaussians, load_iteration=iteration, opt=args, shuffle=False)
+        scene = Scene(
+            dataset, gaussians, load_iteration=iteration, opt=args, shuffle=False
+        )
 
         bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
@@ -170,7 +183,7 @@ if __name__ == "__main__":
     parser.add_argument("--skip_train", action="store_true")
     parser.add_argument("--skip_test", action="store_true")
     parser.add_argument("--quiet", action="store_true")
-    
+
     parser.add_argument("--get_video", action="store_true")
     parser.add_argument("--n_views", default=None, type=int)
     parser.add_argument("--scene", default=None, type=str)

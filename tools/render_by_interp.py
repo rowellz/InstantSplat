@@ -18,7 +18,7 @@ from instant_splat.gaussian_renderer import render
 import torchvision
 from instant_splat.utils.general_utils import safe_state
 from argparse import ArgumentParser
-from arguments import ModelParams, PipelineParams, get_combined_args
+from instant_splat.arguments import ModelParams, PipelineParams, get_combined_args
 from instant_splat.gaussian_renderer import GaussianModel
 from instant_splat.utils.pose_utils import get_tensor_from_camera
 from instant_splat.utils.camera_utils import generate_interpolated_path

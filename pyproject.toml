@@ -2,7 +2,8 @@
 dependencies = [
     "build>=1.2.2.post1,<2",
     "mini-dust3r>=0.1.1,<0.2",
-    "mmcv-lite>=2.2.0,<3", "pillow-heif>=0.18.0,<0.19",
+    "mmcv-lite>=2.2.0,<3",
+    "pillow-heif>=0.18.0,<0.19",
 ]
 description = "Add a short description here"
 name = "instant_splat"
@@ -61,8 +62,9 @@ icecream = ">=2.1.3,<3"
 [tool.pixi.tasks]
 post-install = { cmd = "pwd", depends_on = ["_download_ckpt"] }
 _modify_rasterizer = { cmd = '''sed -i 's/p_view\.z <= 0\.2f/p_view\.z <= 0.001f/' submodules/diff-gaussian-rasterization/cuda_rasterizer/auxiliary.h''' }
-_get-poses-example = { cmd = """python coarse_init_infer.py --img_base_path data/custom/food --n_views 3 --focal_avg""" }
-_train-example = { cmd = """python train_joint.py -s data/custom/food -m output/food300/ --n_views 3 --scene food --iter 300 --optim_pose""" }
+_get-poses-example = { cmd = """python tools/coarse_init_infer.py --img_base_path data/TT/Family/3_views/ --n_views 3 --focal_avg""" }
+_train-example = { cmd = """python tools/train_joint.py -s data/TT/Family/3_views/ -m output/TT/Family/3_views/ --n_views 3 --scene Family --iter 300 --optim_pose""" }
+_render-example = { cmd = """python tools/render_by_interp.py -s data/TT/Family/3_views/ -m output/TT/Family/3_views/ --n_views 3 --scene Family --iter 300 --eval --get_video""" }
 
 [tool.pixi.tasks._download_ckpt]
 cmd = """
@@ -72,6 +74,13 @@ test -e "checkpoints/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth"
     && wget https://download.europe.naverlabs.com/ComputerVision/DUSt3R/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth -P checkpoints/
    )
 """
+
+[tool.pixi.tasks.app]
+cmd = """
+    python tools/gradio_app.py
+    """
+description = "Runs Gradio frontend"
+
 [tool.pixi.tasks.dev-app]
 cmd = """
     gradio tools/gradio_app.py

@@ -28,7 +28,7 @@ def coarse_infer(
     n_views,
     img_base_path,
     focal_avg,
-):
+) -> None:
     img_folder_path = os.path.join(img_base_path, "images")
     os.makedirs(img_folder_path, exist_ok=True)
     model = AsymmetricCroCo3DStereo.from_pretrained(model_path).to(device)

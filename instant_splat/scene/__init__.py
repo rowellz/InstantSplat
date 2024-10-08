@@ -15,7 +15,7 @@ import json
 from instant_splat.utils.system_utils import searchForMaxIteration
 from instant_splat.scene.dataset_readers import sceneLoadTypeCallbacks
 from instant_splat.scene.gaussian_model import GaussianModel
-from arguments import ModelParams
+from instant_splat.arguments import ModelParams, GroupParams
 from instant_splat.utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
 
 
@@ -24,7 +24,7 @@ class Scene:
 
     def __init__(
         self,
-        args: ModelParams,
+        args: ModelParams | GroupParams,
         gaussians: GaussianModel,
         load_iteration=None,
         opt=None,
@@ -63,9 +63,10 @@ class Scene:
             assert False, "Could not recognize scene type!"
 
         if not self.loaded_iter:
-            with open(scene_info.ply_path, "rb") as src_file, open(
-                os.path.join(self.model_path, "input.ply"), "wb"
-            ) as dest_file:
+            with (
+                open(scene_info.ply_path, "rb") as src_file,
+                open(os.path.join(self.model_path, "input.ply"), "wb") as dest_file,
+            ):
                 dest_file.write(src_file.read())
             json_cams = []
             camlist = []

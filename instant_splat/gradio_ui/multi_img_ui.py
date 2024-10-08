@@ -16,17 +16,26 @@ from typing import Generator
 
 from instant_splat.coarse_init_infer import coarse_infer
 import os
-import numpy as np
 from random import randint
+from instant_splat.scene.cameras import Camera
 from instant_splat.utils.loss_utils import l1_loss, ssim
 from instant_splat.gaussian_renderer import render
+from instant_splat.utils.sh_utils import SH2RGB
 from instant_splat.scene import Scene, GaussianModel
 from tqdm import tqdm
 from instant_splat.utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
-from arguments import ModelParams, PipelineParams, OptimizationParams
+from instant_splat.arguments import (
+    ModelParams,
+    PipelineParams,
+    OptimizationParams,
+    GroupParams,
+)
 from instant_splat.utils.pose_utils import get_camera_from_tensor
-from instant_splat.train_joint import save_pose
+from torch import Tensor
+from jaxtyping import Float32
+from typing import Any
+
 
 from time import perf_counter
 
@@ -43,32 +52,224 @@ zero = torch.Tensor([0]).cuda()
 print(zero.device)  # <-- 'cpu' 🤔
 
 
-def create_blueprint() -> rrb.Blueprint:
-    blueprint: rrb.Blueprint = rrb.Blueprint(
+def save_pose(path: Path, quat_pose, train_cams, llffhold=2):
+    output_poses = []
+    index_colmap = [cam.colmap_id for cam in train_cams]
+    for quat_t in quat_pose:
+        w2c = get_camera_from_tensor(quat_t)
+        output_poses.append(w2c)
+    colmap_poses = []
+    for i in range(len(index_colmap)):
+        ind = index_colmap.index(i + 1)
+        bb = output_poses[ind]
+        bb = bb  # .inverse()
+        colmap_poses.append(bb)
+    colmap_poses = torch.stack(colmap_poses).detach().cpu().numpy()
+    np.save(path, colmap_poses)
+
+
+def log_3d_splats(parent_log_path: Path, gaussians: GaussianModel) -> None:
+    initial_gaussians: Float32[Tensor, "num_gaussians 3"] = gaussians.get_xyz
+    colors: Float32[Tensor, "num_gaussians 3"] = SH2RGB(gaussians.get_features)[:, 0, :]
+
+    # get only the first 10 gaussians
+    rr.log(
+        f"{parent_log_path}/gaussian_points",
+        rr.Points3D(
+            positions=initial_gaussians.numpy(force=True),
+            colors=colors.numpy(force=True),
+        ),
+    )
+
+
+def log_cameras(
+    parent_log_path: Path,
+    cameras: list[Camera],
+    gaussians: GaussianModel,
+    pipe: PipelineParams,
+    bg: Float32[Tensor, "3"],
+) -> None:
+    cam: Camera
+    for idx, cam in enumerate(cameras):
+        quat_t: Float32[Tensor, "7"] = gaussians.get_RT(cam.uid)
+        w2c: Float32[Tensor, "4 4"] = get_camera_from_tensor(quat_t)
+        cam_T_world: Float32[Tensor, "3 4"] = w2c.numpy(force=True)
+        cam_log_path: Path = parent_log_path / f"camera_{cam.uid}"
+        FoVx = cam.FoVx
+        FoVy = cam.FoVy
+        # convert to principal point and focal length
+        fx = cam.image_width / (2 * np.tan(FoVx / 2))
+        fy = cam.image_height / (2 * np.tan(FoVy / 2))
+        principal_point = (cam.image_width / 2, cam.image_height / 2)
+
+        img_gt_viz: Float32[Tensor, "3 h w"] = cam.original_image * 255
+        img_gt_viz: Float32[np.ndarray, "h w 3"] = (
+            img_gt_viz.permute(1, 2, 0).numpy(force=True).astype(np.uint8)
+        )
+
+        render_pkg: dict[str, Any] = render(
+            cam, gaussians, pipe, bg, camera_pose=quat_t
+        )
+        img_pred_viz: Float32[Tensor, "3 h w"] = render_pkg["render"] * 255
+        img_pred_viz: Float32[np.ndarray, "h w 3"] = (
+            img_pred_viz.permute(1, 2, 0).numpy(force=True).astype(np.uint8)
+        )
+
+        rr.log(
+            f"{cam_log_path}",
+            rr.Transform3D(
+                translation=cam_T_world[:3, 3],
+                mat3x3=cam_T_world[:3, :3],
+                from_parent=True,
+                axis_length=0.01,
+            ),
+        )
+        rr.log(
+            f"{cam_log_path}/pinhole",
+            rr.Pinhole(
+                width=cam.image_width,
+                height=cam.image_height,
+                focal_length=(fx, fy),
+                principal_point=principal_point,
+                camera_xyz=rr.ViewCoordinates.RDF,
+                image_plane_distance=0.01,
+            ),
+        )
+        # only log the first three cameras images for efficiency
+        if idx > 2:
+            continue
+        rr.log(f"{cam_log_path}/pinhole/image", rr.Image(img_pred_viz))
+        # log outside of camera to avoid cluttering the view
+        rr.log(f"{parent_log_path}/gt_image_{cam.uid}", rr.Image(img_gt_viz))
+
+
+def create_blueprint(parent_log_path: Path) -> rrb.Blueprint:
+    blueprint = rrb.Blueprint(
         rrb.Horizontal(
-            rrb.Spatial2DView(origin="image/original"),
-            rrb.Spatial2DView(origin="image/blurred"),
+            rrb.Spatial3DView(
+                origin=f"{parent_log_path}",
+            ),
+            rrb.Vertical(
+                rrb.TimeSeriesView(
+                    origin=f"{parent_log_path}/loss_plot",
+                ),
+                rrb.Horizontal(
+                    rrb.Spatial2DView(
+                        origin=f"{parent_log_path}/camera_0/pinhole/",
+                        contents="$origin/**",
+                    ),
+                    rrb.Spatial2DView(
+                        origin=f"{parent_log_path}/gt_image_0",
+                    ),
+                ),
+                rrb.Horizontal(
+                    rrb.Spatial2DView(
+                        origin=f"{parent_log_path}/camera_1/pinhole/",
+                        contents="$origin/**",
+                    ),
+                    rrb.Spatial2DView(
+                        origin=f"{parent_log_path}/gt_image_1",
+                    ),
+                ),
+                rrb.Horizontal(
+                    rrb.Spatial2DView(
+                        origin=f"{parent_log_path}/camera_2/pinhole/",
+                        contents="$origin/**",
+                    ),
+                    rrb.Spatial2DView(
+                        origin=f"{parent_log_path}/gt_image_2",
+                    ),
+                ),
+            ),
+            column_shares=[2, 1],
         ),
         collapse_panels=True,
     )
     return blueprint
 
 
-def estimate_pose_fn(img):
+def prepare_output_and_logger(args) -> None:
+    # Set up output folder
+    print("Output folder: {}".format(args.model_path))
+    os.makedirs(args.model_path, exist_ok=True)
+    with open(os.path.join(args.model_path, "cfg_args"), "w") as cfg_log_f:
+        cfg_log_f.write(str(Namespace(**vars(args))))
+
+    # Create Tensorboard writer
+    tb_writer = None
+    return tb_writer
+
+
+def training_report(
+    iteration,
+    l1_loss,
+    testing_iterations,
+    scene: Scene,
+    renderFunc,
+    renderArgs,
+):
+    # Report test and samples of training set
+    if iteration in testing_iterations:
+        torch.cuda.empty_cache()
+        validation_configs = (
+            {"name": "test", "cameras": scene.getTestCameras()},
+            {
+                "name": "train",
+                "cameras": [
+                    scene.getTrainCameras()[idx % len(scene.getTrainCameras())]
+                    for idx in range(len(scene.getTrainCameras()))
+                ],
+            },
+        )
+
+        for config in validation_configs:
+            if config["cameras"] and len(config["cameras"]) > 0:
+                l1_test = 0.0
+                psnr_test = 0.0
+                for idx, viewpoint in enumerate(config["cameras"]):
+                    if config["name"] == "train":
+                        pose = scene.gaussians.get_RT(viewpoint.uid)
+                    else:
+                        pose = scene.gaussians.get_RT_test(viewpoint.uid)
+                    image = torch.clamp(
+                        renderFunc(
+                            viewpoint, scene.gaussians, *renderArgs, camera_pose=pose
+                        )["render"],
+                        0.0,
+                        1.0,
+                    )
+                    gt_image = torch.clamp(
+                        viewpoint.original_image.to("cuda"), 0.0, 1.0
+                    )
+                    l1_test += l1_loss(image, gt_image).mean().double()
+                    psnr_test += psnr(image, gt_image).mean().double()
+                psnr_test /= len(config["cameras"])
+                l1_test /= len(config["cameras"])
+                print(
+                    f"\n[ITER {iteration}] Evaluating {config['name']}: L1 {l1_test} PSNR {psnr_test}"
+                )
+        torch.cuda.empty_cache()
+
+
+def train_splat_fn(input_files):
     """
     This is required because of
     https://github.com/beartype/beartype/issues/423
     """
-    yield from _estimate_pose_fn(img)
+    yield from _train_splat_fn(input_files)
 
 
-@rr.thread_local_stream("example stream")
-def _estimate_pose_fn(
+@rr.thread_local_stream("train splat stream")
+def _train_splat_fn(
     input_files: list[str], progress=gr.Progress()
 ) -> Generator[bytes, None, None]:
     print(zero.device)
     # beartype causes gradio to break, so type hint after the fact, intead of on function definition
     stream: rr.BinaryStream = rr.binary_stream()
+
+    ##################
+    # Estimate Poses #
+    ##################
 
     if input_files is None or len(input_files) < 3:
         raise gr.Error("Must provide 3 or more images.")
@@ -85,59 +286,74 @@ def _estimate_pose_fn(
         batch_size=1,
         schedule="linear",
         lr=0.01,
-        niter=100,  # 300
+        niter=300,
         n_views=len(input_files),
         img_base_path=base_path,
         focal_avg=True,
     )
     progress(0.4, desc="Camera parameters estimated! Starting streaming...")
 
-    #####
+    ##################
+    # Splat Training #
+    ##################
+
     parser = ArgumentParser(description="Training script parameters")
     lp = ModelParams(parser)
     op = OptimizationParams(parser)
     pp = PipelineParams(parser)
-    parser.add_argument("--ip", type=str, default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=6009)
+
     parser.add_argument("--debug_from", type=int, default=-1)
-    parser.add_argument("--detect_anomaly", action="store_true", default=False)
     parser.add_argument(
         "--test_iterations",
         nargs="+",
         type=int,
-        default=[500, 800, 1000, 1500, 2000, 3000, 4000, 5000, 6000, 7_000, 30_000],
+        default=[
+            300,
+            500,
+            800,
+            1000,
+        ],
     )
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default=None)
-    parser.add_argument("--scene", type=str, default="test")
-    parser.add_argument("--n_views", type=int, default=len(input_files))
+    parser.add_argument("--scene", type=str, default=None)
+    parser.add_argument("--n_views", type=int, default=None)
     parser.add_argument("--get_video", action="store_true")
-    parser.add_argument("--optim_pose", action="store_true", default=True)
+    parser.add_argument("--optim_pose", action="store_true")
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
 
-    # overwrite some parameters
-    args.source_path = base_path
-
-    dataset = lp.extract(args)
-    opt = op.extract(args)
-    pipe = pp.extract(args)
-
+    testing_iterations = args.test_iterations
     saving_iterations = args.save_iterations
     checkpoint_iterations = args.checkpoint_iterations
+    # Values usually set by the user
+    args.model_path = "output/custom/test/"
+    args.source_path = base_path
+    args.iterations = 300
 
+    os.makedirs(args.model_path, exist_ok=True)
+
+    print("Optimizing " + args.model_path)
+
+    dataset: GroupParams = lp.extract(args)
+    opt: GroupParams = op.extract(args)
+    pipe: GroupParams = pp.extract(args)
+    ###
     first_iter = 0
-    # tb_writer = prepare_output_and_logger(dataset)
+    prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
     scene = Scene(dataset, gaussians, opt=args, shuffle=True)
     gaussians.training_setup(opt)
+
     train_cams_init = scene.getTrainCameras().copy()
     os.makedirs(scene.model_path + "pose", exist_ok=True)
     save_pose(scene.model_path + "pose" + "/pose_org.npy", gaussians.P, train_cams_init)
-    bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
-    background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+    bg_color: list[int] = [1, 1, 1] if dataset.white_background else [0, 0, 0]
+    background: Float32[Tensor, "3 "] = torch.tensor(
+        bg_color, dtype=torch.float32, device="cuda"
+    )
 
     iter_start = torch.cuda.Event(enable_timing=True)
     iter_end = torch.cuda.Event(enable_timing=True)
@@ -148,8 +364,22 @@ def _estimate_pose_fn(
     first_iter += 1
 
     start = perf_counter()
+    # Setup rerun logging
+    parent_log_path = Path("world")
+    blueprint: rrb.Blueprint = create_blueprint(parent_log_path)
+    rr.send_blueprint(blueprint)
+    rr.log(f"{parent_log_path}", rr.ViewCoordinates.RDF, static=True)
+    rr.log(
+        f"{parent_log_path}/loss_plot",
+        rr.SeriesLine(color=[255, 0, 0], name="Loss", width=2),
+        static=True,
+    )
+
+    yield stream.read()
+
     for iteration in range(first_iter, opt.iterations + 1):
         iter_start.record()
+        rr.set_time_sequence("iteration", iteration)
 
         gaussians.update_learning_rate(iteration)
 
@@ -162,26 +392,28 @@ def _estimate_pose_fn(
 
         # Pick a random Camera
         if not viewpoint_stack:
-            viewpoint_stack = scene.getTrainCameras().copy()
-        viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack) - 1))
-        pose = gaussians.get_RT(viewpoint_cam.uid)
+            viewpoint_stack: list[Camera] = scene.getTrainCameras().copy()
 
-        # # Render
-        # if (iteration - 1) == debug_from:
-        #     pipe.debug = True
+        viewpoint_cam: Camera = viewpoint_stack.pop(
+            randint(0, len(viewpoint_stack) - 1)
+        )
+        pose: Float32[Tensor, "7"] = gaussians.get_RT(viewpoint_cam.uid)
 
-        bg = torch.rand((3), device="cuda") if opt.random_background else background
+        # Render
+        if (iteration - 1) == args.debug_from:
+            pipe.debug = True
 
-        render_pkg = render(viewpoint_cam, gaussians, pipe, bg, camera_pose=pose)
-        image, viewspace_point_tensor, visibility_filter, radii = (
-            render_pkg["render"],
-            render_pkg["viewspace_points"],
-            render_pkg["visibility_filter"],
-            render_pkg["radii"],
+        bg: Float32[Tensor, "3"] = (
+            torch.rand((3), device="cuda") if opt.random_background else background
         )
 
+        render_pkg: dict[str, Any] = render(
+            viewpoint_cam, gaussians, pipe, bg, camera_pose=pose
+        )
+        image: Float32[Tensor, "c h w"] = render_pkg["render"]
         # Loss
-        gt_image = viewpoint_cam.original_image.cuda()
+        gt_image: Float32[Tensor, "c h w"] = viewpoint_cam.original_image.cuda()
+
         Ll1 = l1_loss(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (
             1.0 - ssim(image, gt_image)
@@ -194,19 +426,35 @@ def _estimate_pose_fn(
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             if iteration % 10 == 0:
+                log_cameras(
+                    parent_log_path, train_cams_init, gaussians, pipe, background
+                )
+                rr.log(f"{parent_log_path}/loss_plot", rr.Scalar(ema_loss_for_log))
                 progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
 
+            # Log and save
+            training_report(
+                iteration,
+                l1_loss,
+                testing_iterations,
+                scene,
+                render,
+                (pipe, background),
+            )
             if iteration in saving_iterations:
-                print("\n[ITER {}] Saving Gaussians".format(iteration))
+                print(f"\n[ITER {iteration}] Saving Gaussians")
                 scene.save(iteration)
                 save_pose(
                     scene.model_path + "pose" + f"/pose_{iteration}.npy",
                     gaussians.P,
                     train_cams_init,
                 )
+
+            if iteration % 100 == 0 or iteration == 1:
+                log_3d_splats(parent_log_path, gaussians)
 
             # Optimizer step
             if iteration < opt.iterations:
@@ -221,30 +469,8 @@ def _estimate_pose_fn(
                 )
 
         end = perf_counter()
-        train_time = end - start
-
-    # img: UInt8[np.ndarray, "h w 3"] = mmcv.imread(input_files[0], channel_order="rgb")
-
-    # img: UInt8[np.ndarray, "... 3"] = mmcv.imrescale(img, 0.25)
-
-    # blueprint: rrb.Blueprint = create_blueprint()
-    # rr.send_blueprint(blueprint)
-
-    # rr.set_time_sequence("iteration", 0)
-
-    # rr.log("image/original", rr.Image(img).compress(jpeg_quality=80))
-    # yield stream.read()
-
-    # blur: UInt8[np.ndarray, "... 3"] = img
-
-    # for i in range(100):
-    #     rr.set_time_sequence("iteration", i)
-
-    #     time.sleep(0.1)
-    #     blur = cv2.GaussianBlur(blur, (3, 3), 0)
-
-    #     rr.log("image/blurred", rr.Image(blur).compress(jpeg_quality=80))
-    #     yield stream.read()
+        train_time: float = end - start
+        yield stream.read()
 
 
 if IN_SPACES:
@@ -299,22 +525,23 @@ def preview_input(input_files: list[str]) -> list[UInt8[ndarray, "h w 3"]]:
 with gr.Blocks() as multi_img_block:
     with gr.Row():
         input_imgs = gr.File(file_count="multiple")
-        gallery_imgs = gr.Gallery(rows=1)
-        img = gr.Image(interactive=True, label="Image", visible=False)
+        with gr.Tab(label="Gallery"):
+            gallery_imgs = gr.Gallery()
+        with gr.Tab(label="Outputs"):
+            splat_3d = gr.Model3D()
     with gr.Row():
-        with gr.Column():
-            pose_btn = gr.Button("Stream Pose Estimation")
-            stop_btn = gr.Button("Stop Streaming")
-            test_btn = gr.Button("Test")
+        splat_btn = gr.Button("Train Splat")
+        stop_splat_btn = gr.Button("Stop Training")
 
     with gr.Row():
         viewer = Rerun(
             streaming=True,
         )
 
-    click_event = pose_btn.click(
-        estimate_pose_fn, inputs=[input_imgs], outputs=[viewer]
+    splat_event = splat_btn.click(
+        fn=train_splat_fn, inputs=[input_imgs], outputs=[viewer]
     )
-    stop_btn.click(fn=None, inputs=[], outputs=[], cancels=[click_event])
+    stop_splat_btn.click(fn=None, inputs=[], outputs=[], cancels=[splat_event])
 
+    # events
     input_imgs.change(fn=preview_input, inputs=[input_imgs], outputs=[gallery_imgs])
