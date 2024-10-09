@@ -10,6 +10,7 @@ import numpy as np
 from numpy import ndarray
 import torch
 import PIL
+import tempfile
 from pathlib import Path
 from jaxtyping import UInt8
 from typing import Generator
@@ -38,6 +39,7 @@ from typing import Any
 
 
 from time import perf_counter
+import uuid
 
 
 try:
@@ -52,7 +54,7 @@ zero = torch.Tensor([0]).cuda()
 print(zero.device)  # <-- 'cpu' 🤔
 
 
-def save_pose(path: Path, quat_pose, train_cams, llffhold=2):
+def save_pose(path: str, quat_pose, train_cams, llffhold=2):
     output_poses = []
     index_colmap = [cam.colmap_id for cam in train_cams]
     for quat_t in quat_pose:
@@ -70,14 +72,15 @@ def save_pose(path: Path, quat_pose, train_cams, llffhold=2):
 
 def log_3d_splats(parent_log_path: Path, gaussians: GaussianModel) -> None:
     initial_gaussians: Float32[Tensor, "num_gaussians 3"] = gaussians.get_xyz
-    colors: Float32[Tensor, "num_gaussians 3"] = SH2RGB(gaussians.get_features)[:, 0, :]
-
+    colors_rgb: Float32[Tensor, "num_gaussians 3"] = SH2RGB(gaussians.get_features)[
+        :, 0, :
+    ]
     # get only the first 10 gaussians
     rr.log(
         f"{parent_log_path}/gaussian_points",
         rr.Points3D(
             positions=initial_gaussians.numpy(force=True),
-            colors=colors.numpy(force=True),
+            colors=colors_rgb.numpy(force=True),
         ),
     )
 
@@ -86,14 +89,14 @@ def log_cameras(
     parent_log_path: Path,
     cameras: list[Camera],
     gaussians: GaussianModel,
-    pipe: PipelineParams,
+    pipe: PipelineParams | GroupParams,
     bg: Float32[Tensor, "3"],
 ) -> None:
     cam: Camera
     for idx, cam in enumerate(cameras):
         quat_t: Float32[Tensor, "7"] = gaussians.get_RT(cam.uid)
         w2c: Float32[Tensor, "4 4"] = get_camera_from_tensor(quat_t)
-        cam_T_world: Float32[Tensor, "3 4"] = w2c.numpy(force=True)
+        cam_T_world: Float32[np.ndarray, "4 4"] = w2c.numpy(force=True)
         cam_log_path: Path = parent_log_path / f"camera_{cam.uid}"
         FoVx = cam.FoVx
         FoVy = cam.FoVy
@@ -103,7 +106,7 @@ def log_cameras(
         principal_point = (cam.image_width / 2, cam.image_height / 2)
 
         img_gt_viz: Float32[Tensor, "3 h w"] = cam.original_image * 255
-        img_gt_viz: Float32[np.ndarray, "h w 3"] = (
+        img_gt_viz: UInt8[np.ndarray, "h w 3"] = (
             img_gt_viz.permute(1, 2, 0).numpy(force=True).astype(np.uint8)
         )
 
@@ -111,7 +114,7 @@ def log_cameras(
             cam, gaussians, pipe, bg, camera_pose=quat_t
         )
         img_pred_viz: Float32[Tensor, "3 h w"] = render_pkg["render"] * 255
-        img_pred_viz: Float32[np.ndarray, "h w 3"] = (
+        img_pred_viz: UInt8[np.ndarray, "h w 3"] = (
             img_pred_viz.permute(1, 2, 0).numpy(force=True).astype(np.uint8)
         )
 
@@ -251,18 +254,21 @@ def training_report(
         torch.cuda.empty_cache()
 
 
-def train_splat_fn(input_files):
+def train_splat_fn(input_files, processed_folder, dust3r_conf):
     """
     This is required because of
     https://github.com/beartype/beartype/issues/423
     """
-    yield from _train_splat_fn(input_files)
+    yield from _train_splat_fn(input_files, processed_folder, dust3r_conf)
 
 
 @rr.thread_local_stream("train splat stream")
 def _train_splat_fn(
-    input_files: list[str], progress=gr.Progress()
-) -> Generator[bytes, None, None]:
+    input_files: list[str],
+    processed_folder: Path,
+    dust3r_conf: int | float,
+    progress=gr.Progress(),
+) -> Generator[tuple[bytes, Path | None], None, None]:
     print(zero.device)
     # beartype causes gradio to break, so type hint after the fact, intead of on function definition
     stream: rr.BinaryStream = rr.binary_stream()
@@ -279,7 +285,11 @@ def _train_splat_fn(
         )
 
     progress(0.05, desc="Estimating Camera parameters with DUSt3R... please wait")
-    base_path = f"{Path(input_files[0]).parent}/processed"
+    if not processed_folder.exists():
+        raise gr.Error(
+            message="Processed folder not found. Please make sure to upload images"
+        )
+    base_path: str = f"{processed_folder}"
     coarse_infer(
         model_path="checkpoints/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth",
         device="cuda",
@@ -290,6 +300,7 @@ def _train_splat_fn(
         n_views=len(input_files),
         img_base_path=base_path,
         focal_avg=True,
+        confidence=float(dust3r_conf),
     )
     progress(0.4, desc="Camera parameters estimated! Starting streaming...")
 
@@ -323,15 +334,16 @@ def _train_splat_fn(
     parser.add_argument("--get_video", action="store_true")
     parser.add_argument("--optim_pose", action="store_true")
     args = parser.parse_args(sys.argv[1:])
-    args.save_iterations.append(args.iterations)
 
     testing_iterations = args.test_iterations
     saving_iterations = args.save_iterations
     checkpoint_iterations = args.checkpoint_iterations
     # Values usually set by the user
-    args.model_path = "output/custom/test/"
+    args.model_path = f"{base_path}/output/"
     args.source_path = base_path
     args.iterations = 300
+
+    args.save_iterations.append(args.iterations)
 
     os.makedirs(args.model_path, exist_ok=True)
 
@@ -375,7 +387,7 @@ def _train_splat_fn(
         static=True,
     )
 
-    yield stream.read()
+    yield stream.read(), None
 
     for iteration in range(first_iter, opt.iterations + 1):
         iter_start.record()
@@ -470,14 +482,20 @@ def _train_splat_fn(
 
         end = perf_counter()
         train_time: float = end - start
-        yield stream.read()
+        final_ply_path = Path(
+            f"{scene.model_path}/point_cloud/iteration_{opt.iterations}/point_cloud.ply"
+        )
+        if final_ply_path.exists():
+            yield stream.read(), str(final_ply_path)
+        else:
+            yield stream.read(), None
 
 
 if IN_SPACES:
     estimate_pose_fn = spaces.GPU(estimate_pose_fn)
 
 
-def preview_input(input_files: list[str]) -> list[UInt8[ndarray, "h w 3"]]:
+def preview_input(input_files: list[str]) -> tuple[list[UInt8[ndarray, "h w 3"]], Path]:
     """
     Processes a list of image file paths, resizes them if necessary, and saves the processed images to a new folder.
 
@@ -508,30 +526,43 @@ def preview_input(input_files: list[str]) -> list[UInt8[ndarray, "h w 3"]]:
             img = mmcv.imrescale(img=img, scale=(720 / max_dim))
         img_list.append(img)
 
-    # save images to parent folder in a new folder called processed
-    input_file_parent: Path = Path(input_files[0]).parent
-    processed_folder: Path = input_file_parent / "processed"
+    # create a temporary directory to store the processed images
+    temp_dir = tempfile.mkdtemp()
+    temp_dir_path = Path(temp_dir)
+    processed_folder = temp_dir_path / "processed"
     processed_folder.mkdir(exist_ok=True)
+
     for i, img in enumerate(img_list):
         print(f"Saving processed image {i} to {processed_folder}")
+        # needs to be in bgr as mmcv use cv2 to write image
         mmcv.imwrite(
-            img=img,
+            img=mmcv.rgb2bgr(img),
             file_path=f"{processed_folder}/images/img_{i}.jpg",
         )
 
-    return img_list
+    return img_list, processed_folder
 
 
 with gr.Blocks() as multi_img_block:
     with gr.Row():
         input_imgs = gr.File(file_count="multiple")
+        processed_folder = gr.State(value=Path(""))
         with gr.Tab(label="Gallery"):
             gallery_imgs = gr.Gallery()
         with gr.Tab(label="Outputs"):
-            splat_3d = gr.Model3D()
+            splat_output = gr.File(label="Output Splat")
     with gr.Row():
         splat_btn = gr.Button("Train Splat")
         stop_splat_btn = gr.Button("Stop Training")
+    with gr.Row():
+        with gr.Accordion(label="Advanced Options", open=False):
+            dust3r_conf = gr.Slider(
+                minimum=1.0,
+                maximum=10.0,
+                value=2.5,
+                step=0.5,
+                label="DUSt3R Confidence Threshold (Higher means more confident)",
+            )
 
     with gr.Row():
         viewer = Rerun(
@@ -539,9 +570,29 @@ with gr.Blocks() as multi_img_block:
         )
 
     splat_event = splat_btn.click(
-        fn=train_splat_fn, inputs=[input_imgs], outputs=[viewer]
+        fn=train_splat_fn,
+        inputs=[input_imgs, processed_folder, dust3r_conf],
+        outputs=[viewer, splat_output],
     )
     stop_splat_btn.click(fn=None, inputs=[], outputs=[], cancels=[splat_event])
 
     # events
-    input_imgs.change(fn=preview_input, inputs=[input_imgs], outputs=[gallery_imgs])
+    input_imgs.change(
+        fn=preview_input, inputs=[input_imgs], outputs=[gallery_imgs, processed_folder]
+    )
+
+    car_example_path = Path("data/custom/car_landscape/4_views")
+    car_image_paths = car_example_path.glob("images/*")
+    car_image_paths = [str(path) for path in car_image_paths]
+    guitars_example_path = Path("data/custom/guitars/5_views")
+    guitar_image_paths = guitars_example_path.glob("images/*")
+    guitar_image_paths = [str(path) for path in guitar_image_paths]
+    headphones_example_path = Path("data/custom/headphones/4_views")
+    headphones_image_paths = headphones_example_path.glob("images/*")
+    headphones_image_paths = [str(path) for path in headphones_image_paths]
+    gr.Examples(
+        examples=[[guitar_image_paths], [car_image_paths], [headphones_image_paths]],
+        fn=train_splat_fn,
+        inputs=[input_imgs, processed_folder, dust3r_conf],
+        outputs=[viewer, splat_output],
+    )

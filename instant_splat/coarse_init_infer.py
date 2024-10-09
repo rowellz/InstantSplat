@@ -28,6 +28,7 @@ def coarse_infer(
     n_views,
     img_base_path,
     focal_avg,
+    confidence: float = 2.0,
 ) -> None:
     img_folder_path = os.path.join(img_base_path, "images")
     os.makedirs(img_folder_path, exist_ok=True)
@@ -66,7 +67,7 @@ def coarse_infer(
     focals = scene.get_focals()
     poses = to_numpy(scene.get_im_poses())
     pts3d = to_numpy(scene.get_pts3d())
-    scene.min_conf_thr = float(scene.conf_trf(torch.tensor(1.0)))
+    scene.min_conf_thr = float(scene.conf_trf(torch.tensor(confidence)))
     confidence_masks = to_numpy(scene.get_masks())
     intrinsics = to_numpy(scene.get_intrinsics())
     ##########################################################################################################################################################################################

@@ -10,6 +10,7 @@
 #
 
 from instant_splat.scene.cameras import Camera
+from instant_splat.scene.dataset_readers import CameraInfo
 import numpy as np
 from instant_splat.utils.general_utils import PILtoTorch
 from instant_splat.utils.graphics_utils import fov2focal
@@ -77,7 +78,7 @@ def cameraList_from_camInfos(cam_infos, resolution_scale, args):
     return camera_list
 
 
-def camera_to_JSON(id, camera: Camera):
+def camera_to_JSON(id, camera: Camera | CameraInfo):
     Rt = np.zeros((4, 4))
     Rt[:3, :3] = camera.R.transpose()
     Rt[:3, 3] = camera.T
