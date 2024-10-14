@@ -139,9 +139,15 @@ def log_cameras(
         # only log the first three cameras images for efficiency
         if idx > 2:
             continue
-        rr.log(f"{cam_log_path}/pinhole/image", rr.Image(img_pred_viz))
+        rr.log(
+            f"{cam_log_path}/pinhole/image",
+            rr.Image(img_pred_viz).compress(jpeg_quality=90),
+        )
         # log outside of camera to avoid cluttering the view
-        rr.log(f"{parent_log_path}/gt_image_{cam.uid}", rr.Image(img_gt_viz))
+        rr.log(
+            f"{parent_log_path}/gt_image_{cam.uid}",
+            rr.Image(img_gt_viz).compress(jpeg_quality=90),
+        )
 
 
 def create_blueprint(parent_log_path: Path) -> rrb.Blueprint:
@@ -489,8 +495,8 @@ def _train_splat_fn(
             yield stream.read(), None, None
 
 
-# if IN_SPACES:
-#     train_splat_fn = spaces.GPU(train_splat_fn)
+if IN_SPACES:
+    train_splat_fn = spaces.GPU(train_splat_fn)
 
 
 def preview_input(input_files: list[str]) -> tuple[list[UInt8[ndarray, "h w 3"]], Path]:
@@ -541,15 +547,20 @@ def preview_input(input_files: list[str]) -> tuple[list[UInt8[ndarray, "h w 3"]]
     return img_list, processed_folder
 
 
+def change_tab_to_output() -> gr.Tabs:
+    return gr.Tabs(selected=1)
+
+
 with gr.Blocks() as multi_img_block:
     with gr.Row():
         input_imgs = gr.File(file_count="multiple")
         processed_folder = gr.State(value=Path(""))
-        with gr.Tab(label="Gallery"):
-            gallery_imgs = gr.Gallery()
-        with gr.Tab(label="Outputs"):
-            splat_3d = gr.Model3D()
-            splat_output = gr.File(label="Output Splat")
+        with gr.Tabs() as tabs:
+            with gr.TabItem(label="Gallery", id=0):
+                gallery_imgs = gr.Gallery()
+            with gr.TabItem(label="Outputs", id=1):
+                splat_3d = gr.Model3D()
+                splat_output = gr.File(label="Output Splat")
     with gr.Row():
         splat_btn = gr.Button("Train Splat")
         stop_splat_btn = gr.Button("Stop Training")
@@ -569,6 +580,10 @@ with gr.Blocks() as multi_img_block:
         )
 
     splat_event = splat_btn.click(
+        fn=change_tab_to_output,
+        inputs=None,
+        outputs=tabs,
+    ).then(
         fn=train_splat_fn,
         inputs=[input_imgs, processed_folder, dust3r_conf],
         outputs=[viewer, splat_output, splat_3d],

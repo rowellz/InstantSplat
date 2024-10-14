@@ -487,7 +487,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/7f/be/df630c387a0a054815d60be6a97eb4e8f17385d5d6fe660e1c02750062b4/termcolor-2.5.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/4b/2c/ffbf7a134b9ab11a67b0cf0726453cedd9c5043a4fe7a35d1cefa9a1bcfb/threadpoolctl-3.5.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/66/c9/d4b03b2490107f13ebd68fe9496d41ae41a7de6275ead56d0d4621b11ffd/yapf-0.40.2-py3-none-any.whl
-      - pypi: dist/instant_splat-0.1.0-py3-none-any.whl
+      - pypi: .
   spaces:
     channels:
     - url: https://conda.anaconda.org/nvidia/
@@ -976,7 +976,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/7f/be/df630c387a0a054815d60be6a97eb4e8f17385d5d6fe660e1c02750062b4/termcolor-2.5.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/4b/2c/ffbf7a134b9ab11a67b0cf0726453cedd9c5043a4fe7a35d1cefa9a1bcfb/threadpoolctl-3.5.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/66/c9/d4b03b2490107f13ebd68fe9496d41ae41a7de6275ead56d0d4621b11ffd/yapf-0.40.2-py3-none-any.whl
-      - pypi: dist/instant_splat-0.1.0-py3-none-any.whl
+      - pypi: .
 packages:
 - kind: conda
   name: _libgcc_mutex
@@ -3829,13 +3829,15 @@ packages:
 - kind: pypi
   name: instant-splat
   version: 0.1.0
-  path: dist/instant_splat-0.1.0-py3-none-any.whl
+  path: .
+  sha256: d9685b5ac52007d3ed79a193961eb7d896abdc885dbd61b721b6138d9795d6b9
   requires_dist:
-  - mini-dust3r<0.2,>=0.1.1
-  - mmcv-lite<3,>=2.2.0
-  - pillow-heif<0.19,>=0.18.0
-  - build<2,>=1.2.2.post1
+  - mini-dust3r>=0.1.1,<0.2
+  - mmcv-lite>=2.2.0,<3
+  - pillow-heif>=0.18.0,<0.19
+  - build>=1.2.2.post1,<2
   requires_python: '>=3.11'
+  editable: true
 - kind: conda
   name: ipython
   version: 8.28.0

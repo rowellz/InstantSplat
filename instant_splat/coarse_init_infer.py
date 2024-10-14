@@ -19,7 +19,7 @@ from instant_splat.utils.dust3r_utils import (
 
 
 def coarse_infer(
-    model_path,
+    model_path: str,
     device,
     batch_size,
     schedule,
@@ -32,6 +32,8 @@ def coarse_infer(
 ) -> None:
     img_folder_path = os.path.join(img_base_path, "images")
     os.makedirs(img_folder_path, exist_ok=True)
+
+    assert os.path.exists(model_path), f"Model path {model_path} does not exist"
     model = AsymmetricCroCo3DStereo.from_pretrained(model_path).to(device)
     ##########################################################################################################################################################################################
 

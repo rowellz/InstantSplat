@@ -35,8 +35,8 @@ huggingface-hub = "*"
 simple_knn = { url = "https://huggingface.co/datasets/pablovela5620/instantsplat/resolve/main/simple_knn-0.1.0%2Bpt231cu118-cp311-cp311-linux_x86_64.whl" }
 diff_gaussian_rasterization = { url = "https://huggingface.co/datasets/pablovela5620/instantsplat/resolve/main/diff_gaussian_rasterization-0.1.0%2Bpt231cu118-cp311-cp311-linux_x86_64.whl" }
 imageio = { version = "*", extras = ["ffmpeg"] }
-# instant_splat = { path = ".", editable = true }
-instant_splat = { path = "dist/instant_splat-0.1.0-py3-none-any.whl" }
+instant_splat = { path = ".", editable = true }
+# instant_splat = { path = "dist/instant_splat-0.1.0-py3-none-any.whl" }
 
 [tool.pixi.dependencies]
 python = "3.11.*"
@@ -88,18 +88,21 @@ cmd = """
     python tools/gradio_app.py
     """
 description = "Runs Gradio frontend"
+depends_on = ["post-install"]
 
 [tool.pixi.tasks.dev-app]
 cmd = """
     gradio tools/gradio_app.py
     """
 description = "Runs Gradio frontend for hotreload"
+depends_on = ["post-install"]
 
 [tool.pixi.feature.spaces.tasks.app]
 cmd = """
     python gradio_app.py
     """
 description = "Runs Gradio frontend in huggingface spaces"
+depends_on = ["post-install"]
 
 [tool.pixi.feature.spaces.pypi-dependencies]
 spaces = "*"
