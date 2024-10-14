@@ -1,3 +1,11 @@
+try:
+    import spaces  # type: ignore # noqa: F401
+
+    IN_SPACES = True
+except ImportError:
+    print("Not running on Zero")
+    IN_SPACES = False
+
 import gradio as gr
 from gradio_rerun import Rerun
 
@@ -37,18 +45,8 @@ from torch import Tensor
 from jaxtyping import Float32
 from typing import Any
 
-
 from time import perf_counter
-import uuid
 
-
-try:
-    import spaces  # type: ignore # noqa: F401
-
-    IN_SPACES = True
-except ImportError:
-    print("Not running on Zero")
-    IN_SPACES = False
 
 zero = torch.Tensor([0]).cuda()
 print(zero.device)  # <-- 'cpu' 🤔
@@ -268,7 +266,7 @@ def _train_splat_fn(
     processed_folder: Path,
     dust3r_conf: int | float,
     progress=gr.Progress(),
-) -> Generator[tuple[bytes, Path | None], None, None]:
+) -> Generator[tuple[bytes, Path | None, Path | None], None, None]:
     print(zero.device)
     # beartype causes gradio to break, so type hint after the fact, intead of on function definition
     stream: rr.BinaryStream = rr.binary_stream()
@@ -387,7 +385,7 @@ def _train_splat_fn(
         static=True,
     )
 
-    yield stream.read(), None
+    yield stream.read(), None, None
 
     for iteration in range(first_iter, opt.iterations + 1):
         iter_start.record()
@@ -437,7 +435,7 @@ def _train_splat_fn(
         with torch.no_grad():
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
-            if iteration % 10 == 0:
+            if iteration % 10 == 0 or iteration == 1:
                 log_cameras(
                     parent_log_path, train_cams_init, gaussians, pipe, background
                 )
@@ -486,13 +484,13 @@ def _train_splat_fn(
             f"{scene.model_path}/point_cloud/iteration_{opt.iterations}/point_cloud.ply"
         )
         if final_ply_path.exists():
-            yield stream.read(), str(final_ply_path)
+            yield stream.read(), str(final_ply_path), str(final_ply_path)
         else:
-            yield stream.read(), None
+            yield stream.read(), None, None
 
 
-if IN_SPACES:
-    estimate_pose_fn = spaces.GPU(estimate_pose_fn)
+# if IN_SPACES:
+#     train_splat_fn = spaces.GPU(train_splat_fn)
 
 
 def preview_input(input_files: list[str]) -> tuple[list[UInt8[ndarray, "h w 3"]], Path]:
@@ -550,6 +548,7 @@ with gr.Blocks() as multi_img_block:
         with gr.Tab(label="Gallery"):
             gallery_imgs = gr.Gallery()
         with gr.Tab(label="Outputs"):
+            splat_3d = gr.Model3D()
             splat_output = gr.File(label="Output Splat")
     with gr.Row():
         splat_btn = gr.Button("Train Splat")
@@ -572,7 +571,7 @@ with gr.Blocks() as multi_img_block:
     splat_event = splat_btn.click(
         fn=train_splat_fn,
         inputs=[input_imgs, processed_folder, dust3r_conf],
-        outputs=[viewer, splat_output],
+        outputs=[viewer, splat_output, splat_3d],
     )
     stop_splat_btn.click(fn=None, inputs=[], outputs=[], cancels=[splat_event])
 
@@ -582,8 +581,8 @@ with gr.Blocks() as multi_img_block:
     )
 
     car_example_path = Path("data/custom/car_landscape/4_views")
-    car_image_paths = car_example_path.glob("images/*")
-    car_image_paths = [str(path) for path in car_image_paths]
+    car_image_paths: Generator[Path, None, None] = car_example_path.glob("images/*")
+    car_image_paths: list[str] = [str(path) for path in car_image_paths]
     guitars_example_path = Path("data/custom/guitars/5_views")
     guitar_image_paths = guitars_example_path.glob("images/*")
     guitar_image_paths = [str(path) for path in guitar_image_paths]
@@ -595,4 +594,5 @@ with gr.Blocks() as multi_img_block:
         fn=train_splat_fn,
         inputs=[input_imgs, processed_folder, dust3r_conf],
         outputs=[viewer, splat_output],
+        cache_examples=False,
     )
