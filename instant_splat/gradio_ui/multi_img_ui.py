@@ -496,7 +496,7 @@ def _train_splat_fn(
 
 
 if IN_SPACES:
-    train_splat_fn = spaces.GPU(train_splat_fn)
+    train_splat_fn = spaces.GPU(train_splat_fn, duration=90)
 
 
 def preview_input(input_files: list[str]) -> tuple[list[UInt8[ndarray, "h w 3"]], Path]:
