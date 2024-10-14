@@ -283,9 +283,9 @@ def _train_splat_fn(
 
     if input_files is None or len(input_files) < 3:
         raise gr.Error("Must provide 3 or more images.")
-    if len(input_files) > 12:
+    if len(input_files) > 5:
         raise gr.Warning(
-            "More than 12 images will result in longer processing time, and potentially gpu time outs!"
+            "More than 5 images will result in longer processing time, and potentially gpu time outs!"
         )
 
     progress(0.05, desc="Estimating Camera parameters with DUSt3R... please wait")
