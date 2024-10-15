@@ -283,8 +283,8 @@ def _train_splat_fn(
 
     if input_files is None or len(input_files) < 3:
         raise gr.Error("Must provide 3 or more images.")
-    if len(input_files) > 5:
-        raise gr.Warning(
+    if len(input_files) > 5 and IN_SPACES:
+        gr.Warning(
             "More than 5 images will result in longer processing time, and potentially gpu time outs!"
         )
 
