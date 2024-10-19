@@ -23,6 +23,7 @@ Uses [Rerun](https://rerun.io/) to visualize, [Gradio](https://www.gradio.app) f
 </p>
 
 ## Install and Run
+### Using Pixi
 Make sure you have the [Pixi](https://pixi.sh/latest/#installation) package manager installed
 ```bash
 git clone https://github.com/pablovela5620/InstantSplat.git
@@ -31,6 +32,14 @@ pixi run app
 ```
 
 All commands can be listed using `pixi task list`
+### Using Docker
+If you'd rather use docker, you can just run
+```
+git clone https://github.com/pablovela5620/InstantSplat.git
+cd InstantSplat
+docker-compose up
+```
+
 ## Hosted Demo
 Demos can be found on huggingface spaces, local version is recommended to avoid GPU timeouts!
 
