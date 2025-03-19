@@ -12,7 +12,9 @@ services:
       - main
     restart: always
     ports:
-      - "7860:7860"
+      - "7869:7860"
+    volumes:
+      - ./:/workspace/InstantSplat
     deploy:
       resources:
         reservations:

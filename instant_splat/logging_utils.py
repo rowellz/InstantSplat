@@ -1,13 +1,20 @@
 from pathlib import Path
+import logging
 import rerun as rr
 import rerun.blueprint as rrb
 from jaxtyping import Float32
 from torch import Tensor
 
+# Configure the logger
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 def log_3d_splats(parent_log_path: Path, gaussians: GaussianModel) -> None:
+    logger.debug("Logging 3D splats started.")
     initial_gaussians: Float32[Tensor, "num_gaussians 3"] = gaussians.get_xyz
     colors: Float32[Tensor, "num_gaussians 3"] = SH2RGB(gaussians.get_features)[:, 0, :]
 
+    logger.debug(f"Initial gaussians: {initial_gaussians.shape}, Colors: {colors.shape}")
     # get only the first 10 gaussians
     rr.log(
         f"{parent_log_path}/gaussian_points",
@@ -16,6 +23,7 @@ def log_3d_splats(parent_log_path: Path, gaussians: GaussianModel) -> None:
             colors=colors.numpy(force=True),
         ),
     )
+    logger.debug("3D splats logged.")
     # ic(scales.shape, scales.dtype)
     # ic(rotations.shape, rotations.dtype)
     # scales = gaussians.get_scaling
@@ -39,12 +47,15 @@ def log_cameras(
     pipe: PipelineParams,
     bg: Float32[Tensor, "3"],
 ) -> None:
+    logger.debug("Logging cameras started.")
     cam: Camera
     for idx, cam in enumerate(cameras):
+        logger.debug(f"Processing camera {cam.uid}")
         quat_t: Float32[Tensor, "7"] = gaussians.get_RT(cam.uid)
         w2c: Float32[Tensor, "4 4"] = get_camera_from_tensor(quat_t)
         cam_T_world: Float32[Tensor, "3 4"] = w2c.numpy(force=True)
         cam_log_path: Path = parent_log_path / f"camera_{cam.uid}"
+        logger.debug(f"Camera transformation matrix shape: {cam_T_world.shape}")
         FoVx = cam.FoVx
         FoVy = cam.FoVy
         # convert to principal point and focal length
@@ -85,15 +96,19 @@ def log_cameras(
                 image_plane_distance=0.01,
             ),
         )
+        logger.debug(f"Camera {cam.uid} transform logged.")
         # only log the first three cameras images for efficiency
         if idx > 2:
+            logger.debug(f"Skipping image logging for camera {cam.uid} to save resources.")
             continue
         rr.log(f"{cam_log_path}/pinhole/image", rr.Image(img_pred_viz))
         # log outside of camera to avoid cluttering the view
         rr.log(f"{parent_log_path}/gt_image_{cam.uid}", rr.Image(img_gt_viz))
+        logger.debug(f"Images for camera {cam.uid} logged.")
 
 
 def create_blueprint(parent_log_path: Path) -> rrb.Blueprint:
+    logger.debug("Creating blueprint.")
     blueprint = rrb.Blueprint(
         rrb.Horizontal(
             rrb.Spatial3DView(
@@ -134,4 +149,5 @@ def create_blueprint(parent_log_path: Path) -> rrb.Blueprint:
             column_shares=[2, 1],
         )
     )
+    logger.debug("Blueprint created.")
     return blueprint

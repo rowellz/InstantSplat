@@ -16,3 +16,4 @@ data/sora/santorini/3_views/sparse/
 data/*
 checkpoints/*
 dist/*
+.qodo

@@ -90,65 +90,114 @@ def log_cameras(
     pipe: PipelineParams | GroupParams,
     bg: Float32[Tensor, "3"],
 ) -> None:
-    cam: Camera
-    for idx, cam in enumerate(cameras):
+    """
+    Logs camera poses, pinhole projections, rendered images, and arrows pointing to image centers in Rerun.
+
+    Args:
+        parent_log_path: Base path for logging in Rerun.
+        cameras: List of Camera objects to log.
+        gaussians: GaussianModel instance for rendering.
+        pipe: Pipeline parameters for rendering.
+        bg: Background color tensor (3D float tensor).
+    """
+    # Pre-allocate arrays for arrow data
+    arrow_origins: list[ndarray] = []
+    arrow_vectors: list[ndarray] = []
+    arrow_colors: list[ndarray] = []
+
+    for cam in cameras:
+        # Get camera pose and convert to camera-to-world transform
         quat_t: Float32[Tensor, "7"] = gaussians.get_RT(cam.uid)
-        w2c: Float32[Tensor, "4 4"] = get_camera_from_tensor(quat_t)
-        cam_T_world: Float32[np.ndarray, "4 4"] = w2c.numpy(force=True)
-        cam_log_path: Path = parent_log_path / f"camera_{cam.uid}"
-        FoVx = cam.FoVx
-        FoVy = cam.FoVy
-        # convert to principal point and focal length
-        fx = cam.image_width / (2 * np.tan(FoVx / 2))
-        fy = cam.image_height / (2 * np.tan(FoVy / 2))
+        w2c: Float32[Tensor, "4 4"] = get_camera_from_tensor(quat_t)  # World-to-camera
+        cam_to_world: ndarray = np.linalg.inv(w2c.numpy(force=True))  # Camera-to-world
+        cam_log_path = parent_log_path / f"camera_{cam.uid}"
+
+        # Camera intrinsics
+        fx = cam.image_width / (2 * np.tan(cam.FoVx / 2))
+        fy = cam.image_height / (2 * np.tan(cam.FoVy / 2))
         principal_point = (cam.image_width / 2, cam.image_height / 2)
 
-        img_gt_viz: Float32[Tensor, "3 h w"] = cam.original_image * 255
-        img_gt_viz: UInt8[np.ndarray, "h w 3"] = (
-            img_gt_viz.permute(1, 2, 0).numpy(force=True).astype(np.uint8)
-        )
-
-        render_pkg: dict[str, Any] = render(
-            cam, gaussians, pipe, bg, camera_pose=quat_t
-        )
-        img_pred_viz: Float32[Tensor, "3 h w"] = render_pkg["render"] * 255
-        img_pred_viz: UInt8[np.ndarray, "h w 3"] = (
-            img_pred_viz.permute(1, 2, 0).numpy(force=True).astype(np.uint8)
-        )
-
+        # Log camera transform in world space
         rr.log(
-            f"{cam_log_path}",
+            str(cam_log_path),
             rr.Transform3D(
-                translation=cam_T_world[:3, 3],
-                mat3x3=cam_T_world[:3, :3],
-                from_parent=True,
-                axis_length=0.01,
+                translation=cam_to_world[:3, 3],  # Camera position in world space
+                mat3x3=cam_to_world[:3, :3],      # Camera orientation
+                from_parent=False,                # World is parent frame
             ),
         )
+
+        # Log pinhole camera model
         rr.log(
             f"{cam_log_path}/pinhole",
             rr.Pinhole(
-                width=cam.image_width,
-                height=cam.image_height,
-                focal_length=(fx, fy),
+                resolution=[cam.image_width, cam.image_height],
+                focal_length=[fx, fy],
                 principal_point=principal_point,
-                camera_xyz=rr.ViewCoordinates.RDF,
-                image_plane_distance=0.01,
+                camera_xyz=rr.ViewCoordinates.RDF,  # Rerun's default: Right, Down, Forward
             ),
         )
-        # only log the first three cameras images for efficiency
-        if idx > 2:
-            continue
+
+        # Render and log predicted image
+        render_pkg = render(cam, gaussians, pipe, bg, camera_pose=quat_t)
+        img_pred_viz: Float32[Tensor, "3 h w"] = render_pkg["render"] * 255
+        img_pred_viz: UInt8[ndarray, "h w 3"] = (
+            img_pred_viz.permute(1, 2, 0).numpy(force=True).astype(np.uint8)
+        )
         rr.log(
             f"{cam_log_path}/pinhole/image",
             rr.Image(img_pred_viz).compress(jpeg_quality=90),
         )
-        # log outside of camera to avoid cluttering the view
+
+        # Log ground truth image
+        img_gt_viz: Float32[Tensor, "3 h w"] = cam.original_image * 255
+        img_gt_viz: UInt8[ndarray, "h w 3"] = (
+            img_gt_viz.permute(1, 2, 0).numpy(force=True).astype(np.uint8)
+        )
         rr.log(
             f"{parent_log_path}/gt_image_{cam.uid}",
             rr.Image(img_gt_viz).compress(jpeg_quality=90),
         )
 
+        # Calculate 3D point for image center
+        center_2d = np.array([cam.image_width / 2, cam.image_height / 2, 1.0])
+        intrinsics = np.array([
+            [fx, 0, principal_point[0]],
+            [0, fy, principal_point[1]],
+            [0, 0, 1]
+        ])
+        inv_intrinsics = np.linalg.inv(intrinsics)
+        center_3d_cam = inv_intrinsics @ center_2d  # 3D point in camera space
+        center_3d_cam = center_3d_cam / center_3d_cam[2]  # Normalize by depth
+        center_3d_world = cam_to_world @ np.append(center_3d_cam, 1.0)  # To world space
+
+        # Compute arrow data
+        cam_origin = cam_to_world[:3, 3]
+        arrow_vector = center_3d_world[:3] - cam_origin
+
+        arrow_origins.append(cam_origin)
+        arrow_vectors.append(arrow_vector)
+        arrow_colors.append([255, 0, 0])  # Red arrows
+
+        # Debug logging with modern Rerun API
+        rr.log(
+            f"{cam_log_path}/debug",
+            rr.TextDocument(
+                f"Origin: {cam_origin.tolist()}, Vector: {arrow_vector.tolist()}",
+                media_type=rr.MediaType.TEXT,
+            ),
+            timeless=False,  # Log with current timestamp
+        )
+
+    # Log all arrows at once as NumPy arrays
+    rr.log(
+        f"{parent_log_path}/arrows_to_centers",
+        rr.Arrows3D(
+            origins=np.array(arrow_origins),
+            vectors=np.array(arrow_vectors),
+            colors=np.array(arrow_colors, dtype=np.uint8),
+        ),
+    )
 
 def create_blueprint(parent_log_path: Path) -> rrb.Blueprint:
     blueprint = rrb.Blueprint(
@@ -185,6 +234,33 @@ def create_blueprint(parent_log_path: Path) -> rrb.Blueprint:
                     ),
                     rrb.Spatial2DView(
                         origin=f"{parent_log_path}/gt_image_2",
+                    ),
+                ),
+                rrb.Horizontal(
+                    rrb.Spatial2DView(
+                        origin=f"{parent_log_path}/camera_3/pinhole/",
+                        contents="$origin/**",
+                    ),
+                    rrb.Spatial2DView(
+                        origin=f"{parent_log_path}/gt_image_3",
+                    ),
+                ),
+                rrb.Horizontal(
+                    rrb.Spatial2DView(
+                        origin=f"{parent_log_path}/camera_4/pinhole/",
+                        contents="$origin/**",
+                    ),
+                    rrb.Spatial2DView(
+                        origin=f"{parent_log_path}/gt_image_4",
+                    ),
+                ),
+                rrb.Horizontal(
+                    rrb.Spatial2DView(
+                        origin=f"{parent_log_path}/camera_5/pinhole/",
+                        contents="$origin/**",
+                    ),
+                    rrb.Spatial2DView(
+                        origin=f"{parent_log_path}/gt_image_5",
                     ),
                 ),
             ),
