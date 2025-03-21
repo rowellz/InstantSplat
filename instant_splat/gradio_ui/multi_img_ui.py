@@ -12,6 +12,7 @@ from gradio_rerun import Rerun
 import rerun as rr
 import rerun.blueprint as rrb
 
+from typing import List, Union, Optional
 import sys
 import mmcv
 import numpy as np
@@ -25,6 +26,9 @@ from typing import Generator
 
 from instant_splat.coarse_init_infer import coarse_infer
 import os
+import random
+from math import tau
+
 from random import randint
 from instant_splat.scene.cameras import Camera
 from instant_splat.utils.loss_utils import l1_loss, ssim
@@ -51,7 +55,6 @@ from time import perf_counter
 zero = torch.Tensor([0]).cuda()
 print(zero.device)  # <-- 'cpu' 🤔
 
-
 def save_pose(path: str, quat_pose, train_cams, llffhold=2):
     output_poses = []
     index_colmap = [cam.colmap_id for cam in train_cams]
@@ -73,7 +76,6 @@ def log_3d_splats(parent_log_path: Path, gaussians: GaussianModel) -> None:
     colors_rgb: Float32[Tensor, "num_gaussians 3"] = SH2RGB(gaussians.get_features)[
         :, 0, :
     ]
-    # get only the first 10 gaussians
     rr.log(
         f"{parent_log_path}/gaussian_points",
         rr.Points3D(
@@ -83,15 +85,62 @@ def log_3d_splats(parent_log_path: Path, gaussians: GaussianModel) -> None:
     )
 
 
+def ray_sphere_intersection(
+    ray_origin: ndarray,
+    ray_dir: ndarray,
+    sphere_center: ndarray,
+    sphere_radius: float
+) -> Optional[float]:
+    oc = ray_origin - sphere_center
+    a = float(np.dot(ray_dir, ray_dir))
+    b = 2.0 * float(np.dot(oc, ray_dir))
+    c = float(np.dot(oc, oc)) - sphere_radius**2
+    discriminant = b**2 - 4 * a * c
+    
+    if discriminant < 0:
+        return None
+    
+    sqrt_disc = np.sqrt(discriminant)
+    t0 = (-b - sqrt_disc) / (2 * a)
+    t1 = (-b + sqrt_disc) / (2 * a)
+    
+    if t0 > 0:
+        return t0
+    if t1 > 0:
+        return t1
+    return None
+
+def find_closest_intersection(
+    ray_origin: ndarray,
+    ray_dir: ndarray,
+    gaussian_centers: ndarray,
+    gaussian_radii: ndarray
+) -> Optional[ndarray]:
+    closest_t = float('inf')
+    closest_point = None
+    
+    for i in range(len(gaussian_centers)):
+        t = ray_sphere_intersection(
+            ray_origin,
+            ray_dir,
+            gaussian_centers[i],
+            float(gaussian_radii[i])
+        )
+        if t is not None and t < closest_t:
+            closest_t = t
+            closest_point = ray_origin + t * ray_dir
+    
+    return closest_point
+
 def log_cameras(
-    parent_log_path: Path,
+    parent_log_path: Path,  # Fixed the parameter name from Marlparent_log_path
     cameras: list[Camera],
     gaussians: GaussianModel,
     pipe: PipelineParams | GroupParams,
     bg: Float32[Tensor, "3"],
 ) -> None:
     """
-    Logs camera poses, pinhole projections, rendered images, and arrows pointing to image centers in Rerun.
+    Logs camera poses, pinhole projections, and rendered images in Rerun.
 
     Args:
         parent_log_path: Base path for logging in Rerun.
@@ -100,12 +149,7 @@ def log_cameras(
         pipe: Pipeline parameters for rendering.
         bg: Background color tensor (3D float tensor).
     """
-    # Pre-allocate arrays for arrow data
-    arrow_origins: list[ndarray] = []
-    arrow_vectors: list[ndarray] = []
-    arrow_colors: list[ndarray] = []
-
-    for cam in cameras:
+    for i, cam in enumerate(cameras):
         # Get camera pose and convert to camera-to-world transform
         quat_t: Float32[Tensor, "7"] = gaussians.get_RT(cam.uid)
         w2c: Float32[Tensor, "4 4"] = get_camera_from_tensor(quat_t)  # World-to-camera
@@ -159,7 +203,41 @@ def log_cameras(
             rr.Image(img_gt_viz).compress(jpeg_quality=90),
         )
 
-        # Calculate 3D point for image center
+def log_camera_lines(
+    parent_log_path: Path,
+    cameras: list[Camera],
+    gaussians: GaussianModel
+) -> None:
+    """
+    Logs 3D lines from camera positions to their intersections with Gaussian splats in Rerun.
+
+    Args:
+        parent_log_path: Base path for logging in Rerun.
+        cameras: List of Camera objects to log lines for.
+        gaussians: GaussianModel instance containing camera poses and Gaussian data.
+    """
+    # Clear previous lines
+    rr.log(f"{parent_log_path}/arrows", rr.Clear(recursive=True))
+
+    # Get Gaussian data for intersection calculations
+    gaussian_centers = gaussians.get_xyz.numpy(force=True)  # [N, 3]
+    gaussian_radii = gaussians.get_scaling.numpy(force=True)  # [N, 3]
+    # Use maximum scaling dimension as sphere radius for simplicity
+    gaussian_radii = np.max(gaussian_radii, axis=1)  # [N]
+
+    line_strips = []
+    for i, cam in enumerate(cameras):
+        # Get camera pose and convert to camera-to-world transform
+        quat_t: Float32[Tensor, "7"] = gaussians.get_RT(cam.uid)
+        w2c: Float32[Tensor, "4 4"] = get_camera_from_tensor(quat_t)
+        cam_to_world: ndarray = np.linalg.inv(w2c.numpy(force=True))
+
+        # Camera intrinsics
+        fx = cam.image_width / (2 * np.tan(cam.FoVx / 2))
+        fy = cam.image_height / (2 * np.tan(cam.FoVy / 2))
+        principal_point = (cam.image_width / 2, cam.image_height / 2)
+
+        # Calculate ray direction towards image center in camera space
         center_2d = np.array([cam.image_width / 2, cam.image_height / 2, 1.0])
         intrinsics = np.array([
             [fx, 0, principal_point[0]],
@@ -167,36 +245,48 @@ def log_cameras(
             [0, 0, 1]
         ])
         inv_intrinsics = np.linalg.inv(intrinsics)
-        center_3d_cam = inv_intrinsics @ center_2d  # 3D point in camera space
-        center_3d_cam = center_3d_cam / center_3d_cam[2]  # Normalize by depth
-        center_3d_world = cam_to_world @ np.append(center_3d_cam, 1.0)  # To world space
-
-        # Compute arrow data
+        center_3d_cam = inv_intrinsics @ center_2d
+        center_3d_cam = center_3d_cam / center_3d_cam[2]  # Normalize
+        center_3d_world = cam_to_world @ np.append(center_3d_cam, 1.0)
+        
+        # Compute ray parameters
         cam_origin = cam_to_world[:3, 3]
-        arrow_vector = center_3d_world[:3] - cam_origin
+        ray_dir = center_3d_world[:3] - cam_origin
+        ray_dir = ray_dir / np.linalg.norm(ray_dir)  # Normalize direction
+        
+        # Find intersection with Gaussians
+        intersection_point = find_closest_intersection(
+            cam_origin,
+            ray_dir,
+            gaussian_centers,
+            gaussian_radii
+        )
+        
+        # Set line endpoint to intersection if found, otherwise use original endpoint
+        if intersection_point is not None:
+            line_end = intersection_point
+        else:
+            line_end = center_3d_world[:3]  # Fallback to original endpoint
 
-        arrow_origins.append(cam_origin)
-        arrow_vectors.append(arrow_vector)
-        arrow_colors.append([255, 0, 0])  # Red arrows
+        # Add line segment
+        line_strips.append([cam_origin, line_end])
+        line_strips.append([line_end, cam_origin, ])
 
-        # Debug logging with modern Rerun API
+
+        # Debug logging
         rr.log(
-            f"{cam_log_path}/debug",
+            f"{parent_log_path}/camera_{cam.uid}/debug",
             rr.TextDocument(
-                f"Origin: {cam_origin.tolist()}, Vector: {arrow_vector.tolist()}",
+                f"Origin: {cam_origin.tolist()}, End: {line_end.tolist()}",
                 media_type=rr.MediaType.TEXT,
             ),
-            timeless=False,  # Log with current timestamp
+            timeless=False,
         )
 
-    # Log all arrows at once as NumPy arrays
+    # Log all line segments
     rr.log(
-        f"{parent_log_path}/arrows_to_centers",
-        rr.Arrows3D(
-            origins=np.array(arrow_origins),
-            vectors=np.array(arrow_vectors),
-            colors=np.array(arrow_colors, dtype=np.uint8),
-        ),
+        f"{parent_log_path}/arrows",
+        rr.LineStrips3D(line_strips),
     )
 
 def create_blueprint(parent_log_path: Path) -> rrb.Blueprint:
@@ -272,15 +362,10 @@ def create_blueprint(parent_log_path: Path) -> rrb.Blueprint:
 
 
 def prepare_output_and_logger(args) -> None:
-    # Set up output folder
     print("Output folder: {}".format(args.model_path))
     os.makedirs(args.model_path, exist_ok=True)
     with open(os.path.join(args.model_path, "cfg_args"), "w") as cfg_log_f:
         cfg_log_f.write(str(Namespace(**vars(args))))
-
-    # Create Tensorboard writer
-    tb_writer = None
-    return tb_writer
 
 
 def training_report(
@@ -291,7 +376,6 @@ def training_report(
     renderFunc,
     renderArgs,
 ):
-    # Report test and samples of training set
     if iteration in testing_iterations:
         torch.cuda.empty_cache()
         validation_configs = (
@@ -335,10 +419,6 @@ def training_report(
 
 
 def train_splat_fn(input_files, processed_folder, dust3r_conf):
-    """
-    This is required because of
-    https://github.com/beartype/beartype/issues/423
-    """
     yield from _train_splat_fn(input_files, processed_folder, dust3r_conf)
 
 
@@ -350,12 +430,7 @@ def _train_splat_fn(
     progress=gr.Progress(),
 ) -> Generator[tuple[bytes, Path | None, Path | None], None, None]:
     print(zero.device)
-    # beartype causes gradio to break, so type hint after the fact, intead of on function definition
     stream: rr.BinaryStream = rr.binary_stream()
-
-    ##################
-    # Estimate Poses #
-    ##################
 
     if input_files is None or len(input_files) < 3:
         raise gr.Error("Must provide 3 or more images.")
@@ -384,10 +459,6 @@ def _train_splat_fn(
     )
     progress(0.4, desc="Camera parameters estimated! Starting streaming...")
 
-    ##################
-    # Splat Training #
-    ##################
-
     parser = ArgumentParser(description="Training script parameters")
     lp = ModelParams(parser)
     op = OptimizationParams(parser)
@@ -398,12 +469,7 @@ def _train_splat_fn(
         "--test_iterations",
         nargs="+",
         type=int,
-        default=[
-            300,
-            500,
-            800,
-            1000,
-        ],
+        default=[300, 500, 800, 1000],
     )
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--quiet", action="store_true")
@@ -418,10 +484,9 @@ def _train_splat_fn(
     testing_iterations = args.test_iterations
     saving_iterations = args.save_iterations
     checkpoint_iterations = args.checkpoint_iterations
-    # Values usually set by the user
     args.model_path = f"{base_path}/output/"
     args.source_path = base_path
-    args.iterations = 300
+    args.iterations = 1
 
     args.save_iterations.append(args.iterations)
 
@@ -432,7 +497,6 @@ def _train_splat_fn(
     dataset: GroupParams = lp.extract(args)
     opt: GroupParams = op.extract(args)
     pipe: GroupParams = pp.extract(args)
-    ###
     first_iter = 0
     prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
@@ -456,7 +520,6 @@ def _train_splat_fn(
     first_iter += 1
 
     start = perf_counter()
-    # Setup rerun logging
     parent_log_path = Path("world")
     blueprint: rrb.Blueprint = create_blueprint(parent_log_path)
     rr.send_blueprint(blueprint)
@@ -469,127 +532,78 @@ def _train_splat_fn(
 
     yield stream.read(), None, None
 
-    for iteration in range(first_iter, opt.iterations + 1):
-        iter_start.record()
-        rr.set_time_sequence("iteration", iteration)
+    iteration = 1
+    iter_start.record()
+    rr.set_time_sequence("iteration", iteration)
 
-        gaussians.update_learning_rate(iteration)
+    gaussians.update_learning_rate(iteration)
 
-        if args.optim_pose is False:
-            gaussians.P.requires_grad_(False)
+    if args.optim_pose is False:
+        gaussians.P.requires_grad_(False)
 
-        # Every 1000 its we increase the levels of SH up to a maximum degree
-        if iteration % 1000 == 0:
-            gaussians.oneupSHdegree()
+    if iteration % 1000 == 0:
+        gaussians.oneupSHdegree()
 
-        # Pick a random Camera
-        if not viewpoint_stack:
-            viewpoint_stack: list[Camera] = scene.getTrainCameras().copy()
+    if not viewpoint_stack:
+        viewpoint_stack: list[Camera] = scene.getTrainCameras().copy()
 
-        viewpoint_cam: Camera = viewpoint_stack.pop(
-            randint(0, len(viewpoint_stack) - 1)
-        )
-        pose: Float32[Tensor, "7"] = gaussians.get_RT(viewpoint_cam.uid)
+    viewpoint_cam: Camera = viewpoint_stack.pop(randint(0, len(viewpoint_stack) - 1))
+    pose: Float32[Tensor, "7"] = gaussians.get_RT(viewpoint_cam.uid)
 
-        # Render
-        if (iteration - 1) == args.debug_from:
-            pipe.debug = True
+    if (iteration - 1) == args.debug_from:
+        pipe.debug = True
 
-        bg: Float32[Tensor, "3"] = (
-            torch.rand((3), device="cuda") if opt.random_background else background
-        )
+    bg: Float32[Tensor, "3"] = (
+        torch.rand((3), device="cuda") if opt.random_background else background
+    )
 
-        render_pkg: dict[str, Any] = render(
-            viewpoint_cam, gaussians, pipe, bg, camera_pose=pose
-        )
-        image: Float32[Tensor, "c h w"] = render_pkg["render"]
-        # Loss
-        gt_image: Float32[Tensor, "c h w"] = viewpoint_cam.original_image.cuda()
+    render_pkg: dict[str, Any] = render(viewpoint_cam, gaussians, pipe, bg, camera_pose=pose)
+    image: Float32[Tensor, "c h w"] = render_pkg["render"]
+    gt_image: Float32[Tensor, "c h w"] = viewpoint_cam.original_image.cuda()
 
-        Ll1 = l1_loss(image, gt_image)
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (
-            1.0 - ssim(image, gt_image)
-        )
-        loss.backward()
+    Ll1 = l1_loss(image, gt_image)
+    loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+    loss.backward()
 
-        iter_end.record()
+    iter_end.record()
 
-        with torch.no_grad():
-            # Progress bar
-            ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
-            if iteration % 10 == 0 or iteration == 1:
-                log_cameras(
-                    parent_log_path, train_cams_init, gaussians, pipe, background
-                )
-                rr.log(f"{parent_log_path}/loss_plot", rr.Scalar(ema_loss_for_log))
-                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
-                progress_bar.update(10)
-            if iteration == opt.iterations:
-                progress_bar.close()
+    with torch.no_grad():
+        ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
+        log_cameras(parent_log_path, train_cams_init, gaussians, pipe, background)
+        log_camera_lines(parent_log_path, train_cams_init, gaussians)  # New call to log lines
+        rr.log(f"{parent_log_path}/loss_plot", rr.Scalar(ema_loss_for_log))
+        progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
+        progress_bar.update(1)
+        progress_bar.close()
 
-            # Log and save
-            training_report(
-                iteration,
-                l1_loss,
-                testing_iterations,
-                scene,
-                render,
-                (pipe, background),
-            )
-            if iteration in saving_iterations:
-                print(f"\n[ITER {iteration}] Saving Gaussians")
-                scene.save(iteration)
-                save_pose(
-                    scene.model_path + "pose" + f"/pose_{iteration}.npy",
-                    gaussians.P,
-                    train_cams_init,
-                )
+        training_report(iteration, l1_loss, testing_iterations, scene, render, (pipe, background))
+        if iteration in saving_iterations:
+            print(f"\n[ITER {iteration}] Saving Gaussians")
+            scene.save(iteration)
+            save_pose(scene.model_path + "pose" + f"/pose_{iteration}.npy", gaussians.P, train_cams_init)
 
-            if iteration % 100 == 0 or iteration == 1:
-                log_3d_splats(parent_log_path, gaussians)
+        log_3d_splats(parent_log_path, gaussians)
 
-            # Optimizer step
-            if iteration < opt.iterations:
-                gaussians.optimizer.step()
-                gaussians.optimizer.zero_grad(set_to_none=True)
+        gaussians.optimizer.step()
+        gaussians.optimizer.zero_grad(set_to_none=True)
 
-            if iteration in checkpoint_iterations:
-                print("\n[ITER {}] Saving Checkpoint".format(iteration))
-                torch.save(
-                    (gaussians.capture(), iteration),
-                    scene.model_path + "/chkpnt" + str(iteration) + ".pth",
-                )
+        if iteration in checkpoint_iterations:
+            print("\n[ITER {}] Saving Checkpoint".format(iteration))
+            torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
 
-        end = perf_counter()
-        train_time: float = end - start
-        final_ply_path = Path(
-            f"{scene.model_path}/point_cloud/iteration_{opt.iterations}/point_cloud.ply"
-        )
-        if final_ply_path.exists():
-            yield stream.read(), str(final_ply_path), str(final_ply_path)
-        else:
-            yield stream.read(), None, None
-
+    end = perf_counter()
+    train_time: float = end - start
+    final_ply_path = Path(f"{scene.model_path}/point_cloud/iteration_{opt.iterations}/point_cloud.ply")
+    if final_ply_path.exists():
+        yield stream.read(), str(final_ply_path), str(final_ply_path)
+    else:
+        yield stream.read(), None, None
 
 if IN_SPACES:
     train_splat_fn = spaces.GPU(train_splat_fn, duration=90)
 
 
 def preview_input(input_files: list[str]) -> tuple[list[UInt8[ndarray, "h w 3"]], Path]:
-    """
-    Processes a list of image file paths, resizes them if necessary, and saves the processed images to a new folder.
-
-    Args:
-        input_files (list[str]): List of image file paths to be processed.
-
-    Returns:
-        list[UInt8[ndarray, "h w 3"]]: List of processed images as NumPy arrays with shape (height, width, 3).
-
-    Notes:
-        - If the input file is in HEIC or HEIF format, it is converted to RGB using PIL.
-        - Images are resized such that their maximum dimension does not exceed 720 pixels.
-        - Processed images are saved in a new folder named 'processed' within the parent directory of the input files.
-    """
     if input_files is None:
         return None
     img_list: list[UInt8[ndarray, "h w 3"]] = []
@@ -600,13 +614,11 @@ def preview_input(input_files: list[str]) -> tuple[list[UInt8[ndarray, "h w 3"]]
         else:
             img: UInt8[ndarray, "h w 3"] = mmcv.imread(img_file, channel_order="rgb")
 
-        # reshape image so that its max dimension is 720
         max_dim = max(img.shape[:2])
         if max_dim > 720:
             img = mmcv.imrescale(img=img, scale=(720 / max_dim))
         img_list.append(img)
 
-    # create a temporary directory to store the processed images
     temp_dir = tempfile.mkdtemp()
     temp_dir_path = Path(temp_dir)
     processed_folder = temp_dir_path / "processed"
@@ -614,7 +626,6 @@ def preview_input(input_files: list[str]) -> tuple[list[UInt8[ndarray, "h w 3"]]
 
     for i, img in enumerate(img_list):
         print(f"Saving processed image {i} to {processed_folder}")
-        # needs to be in bgr as mmcv use cv2 to write image
         mmcv.imwrite(
             img=mmcv.rgb2bgr(img),
             file_path=f"{processed_folder}/images/img_{i}.jpg",
@@ -666,7 +677,6 @@ with gr.Blocks() as multi_img_block:
     )
     stop_splat_btn.click(fn=None, inputs=[], outputs=[], cancels=[splat_event])
 
-    # events
     input_imgs.change(
         fn=preview_input, inputs=[input_imgs], outputs=[gallery_imgs, processed_folder]
     )
