@@ -8,6 +8,7 @@ from mini_dust3r.model import AsymmetricCroCo3DStereo
 from mini_dust3r.utils.device import to_numpy
 from mini_dust3r.image_pairs import make_pairs
 from mini_dust3r.cloud_opt import global_aligner, GlobalAlignerMode
+from typing import Optional
 
 from instant_splat.utils.dust3r_utils import (
     compute_global_alignment,
@@ -15,6 +16,7 @@ from instant_splat.utils.dust3r_utils import (
     storePly,
     save_colmap_cameras,
     save_colmap_images,
+    parse_cam_and_img_txt
 )
 
 
@@ -29,6 +31,8 @@ def coarse_infer(
     img_base_path,
     focal_avg,
     confidence: float = 2.0,
+    cameras_txt: Optional[str] = None,
+    images_txt: Optional[str] = None
 ) -> None:
     img_folder_path = os.path.join(img_base_path, "images")
     os.makedirs(img_folder_path, exist_ok=True)
@@ -55,14 +59,33 @@ def coarse_infer(
     scene = global_aligner(
         output, device=device, mode=GlobalAlignerMode.PointCloudOptimizer
     )
-    loss = compute_global_alignment(
-        scene=scene,
-        init="mst",
-        niter=niter,
-        schedule=schedule,
-        lr=lr,
-        focal_avg=focal_avg,
-    )
+    if cameras_txt is not None and images_txt is not None:
+        poses = parse_cam_and_img_txt(cameras_txt_path=cameras_txt, images_txt_path=images_txt)
+        poses = poses[::-1]
+        scene.preset_pose(poses, pose_msk=None)
+        loss = compute_global_alignment(
+            scene=scene,
+            init="mst",
+            niter=niter,
+            schedule=schedule,
+            lr=lr,
+            focal_avg=focal_avg,
+            use_colmap_poses=False,
+            # cameras_txt_path=cameras_txt,
+            # images_txt_path=images_txt,
+        )
+
+    else:
+            
+        loss = compute_global_alignment(
+            scene=scene,
+            init="mst",
+            niter=niter,
+            schedule=schedule,
+            lr=lr,
+            focal_avg=focal_avg,
+            use_colmap_poses=False,
+        )
     scene = scene.clean_pointcloud()
 
     imgs = to_numpy(scene.imgs)
@@ -90,4 +113,7 @@ def coarse_infer(
     storePly(os.path.join(output_colmap_path, "points3D.ply"), pts_4_3dgs, color_4_3dgs)
     pts_4_3dgs_all = np.array(pts3d).reshape(-1, 3)
     np.save(output_colmap_path + "/pts_4_3dgs_all.npy", pts_4_3dgs_all)
-    np.save(output_colmap_path + "/focal.npy", np.array(focals.cpu()))
+    if cameras_txt is not None and images_txt is not None:
+        np.save(output_colmap_path + "/focal.npy", focals.detach().cpu().numpy())
+    else:
+        np.save(output_colmap_path + "/focal.npy", np.array(focals.cpu()))

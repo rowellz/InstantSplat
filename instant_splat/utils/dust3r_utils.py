@@ -1,3 +1,4 @@
+import re
 import os
 import torch
 import cv2
@@ -7,6 +8,7 @@ from PIL.ImageOps import exif_transpose
 from plyfile import PlyData, PlyElement
 import torchvision.transforms as tvf
 import roma
+
 
 import mini_dust3r.cloud_opt.init_im_poses as init_fun
 from mini_dust3r.cloud_opt.base_opt import global_alignment_loop
@@ -116,10 +118,76 @@ def init_minimum_spanning_tree(scene, focal_avg=False, known_focal=None, **kw):
 
     return init_from_pts3d(scene, pts3d, im_focals, im_poses)
 
+def parse_cam_and_img_txt(cameras_txt_path=None, images_txt_path=None):
+    if cameras_txt_path and images_txt_path:
+        # Parse cameras.txt for intrinsics
+        camera_intrinsics = {}
+        camera_sizes = {}
+        with open(cameras_txt_path, "r") as f:
+            for line in f:
+                if line.startswith('#') or not line.strip():
+                    continue
+                parts = line.strip().split()
+                if len(parts) < 8:
+                    continue
+                camera_id = int(parts[0])
+                model = parts[1]
+                width = int(parts[2])
+                height = int(parts[3])
+                fx = float(parts[4])
+                fy = float(parts[5])
+                cx = float(parts[6])
+                cy = float(parts[7])
+                camera_intrinsics[camera_id] = (fx, fy, cx, cy)
+                camera_sizes[camera_id] = (width, height)
+        poses = []
+        img_names = []
+        with open(images_txt_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                # COLMAP images.txt: <image_id> <qw> <qx> <qy> <qz> <tx> <ty> <tz> <camera_id> <name>
+                parts = re.split(r'\s+', line)
+                if len(parts) < 10:
+                    continue
+                qw, qx, qy, qz = map(float, parts[1:5])
+                tx, ty, tz = map(float, parts[5:8])
+                camera_id = int(parts[8])
+                # COLMAP quaternions are [qw, qx, qy, qz]
+                q = [qw, qx, qy, qz]
+                print(f"Image: {parts[9]}")
+                print(f"Parsed quaternion: {q}")
+                print(f"Parsed translation: {[tx, ty, tz]}")
+                R = quaternion_to_rotation_matrix(torch.tensor(q)).numpy()
+                t = np.array([tx, ty, tz]).reshape(3, 1)
+                # Convert COLMAP world-to-camera to camera-to-world
+                pose = np.eye(4)
+                pose[:3, :3] = R.T
+                pose[:3, 3] = (-R.T @ t).flatten()
+                print(f"Resulting C2W pose matrix:\n{pose}")
+                poses.append(pose)
+                img_names.append(parts[9])
+                # Print intrinsics for this image
+                if camera_id in camera_intrinsics:
+                    fx, fy, cx, cy = camera_intrinsics[camera_id]
+                    width, height = camera_sizes[camera_id]
+                    print(f"Intrinsics for image {parts[9]}: fx={fx}, fy={fy}, cx={cx}, cy={cy}, width={width}, height={height}")
+        
+        return poses
+
 
 @torch.cuda.amp.autocast(enabled=False)
 def compute_global_alignment(
-    scene, init=None, niter_PnP=10, focal_avg=False, known_focal=None, **kw
+    scene,
+    init=None,
+    niter_PnP=10,
+    focal_avg=False,
+    known_focal=None,
+    use_colmap_poses=False,
+    cameras_txt_path=None,
+    images_txt_path=None,
+    **kw
 ):
     if init is None:
         pass
@@ -303,3 +371,45 @@ def rigid_points_registration(pts1, pts2, conf=None):
         pts1.reshape(-1, 3), pts2.reshape(-1, 3), weights=conf, compute_scaling=True
     )
     return s, R, T  # return un-scaled (R, T)
+
+
+def quaternion_to_rotation_matrix(quaternion):
+    """
+    Convert a quaternion to a rotation matrix.
+
+    Parameters:
+    - quaternion: A tensor of shape (..., 4) representing quaternions.
+
+    Returns:
+    - A tensor of shape (..., 3, 3) representing rotation matrices.
+    """
+    # Ensure quaternion is of float type for computation
+    quaternion = quaternion.float()
+
+    # Normalize the quaternion to unit length
+    quaternion = quaternion / quaternion.norm(p=2, dim=-1, keepdim=True)
+
+    # Extract components
+    w, x, y, z = (
+        quaternion[..., 0],
+        quaternion[..., 1],
+        quaternion[..., 2],
+        quaternion[..., 3],
+    )
+
+    # Compute rotation matrix components
+    xx, yy, zz = x * x, y * y, z * z
+    xy, xz, yz = x * y, x * z, y * z
+    xw, yw, zw = x * w, y * w, z * w
+
+    # Assemble the rotation matrix
+    R = torch.stack(
+        [
+            torch.stack([1 - 2 * (yy + zz), 2 * (xy - zw), 2 * (xz + yw)], dim=-1),
+            torch.stack([2 * (xy + zw), 1 - 2 * (xx + zz), 2 * (yz - xw)], dim=-1),
+            torch.stack([2 * (xz - yw), 2 * (yz + xw), 1 - 2 * (xx + yy)], dim=-1),
+        ],
+        dim=-2,
+    )
+
+    return R

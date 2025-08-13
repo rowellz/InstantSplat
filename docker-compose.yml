@@ -12,7 +12,12 @@ services:
       - main
     restart: always
     ports:
-      - "7860:7860"
+      - "7862:7860"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./instant_splat:/workspace/InstantSplat/instant_splat
+      - ./checkpoints:/workspace/InstantSplat/checkpoints
     deploy:
       resources:
         reservations:

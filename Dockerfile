@@ -20,6 +20,10 @@ WORKDIR /workspace/InstantSplat
 
 EXPOSE 7860
 
-RUN pixi install 
+RUN rm pixi.lock && \
+    rm -rf .pixi && \
+    mkdir .pixi
+
+RUN pixi install
 
 CMD ["pixi", "run", "--environment", "default", "app"]
