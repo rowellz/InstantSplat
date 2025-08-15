@@ -61,8 +61,9 @@ def coarse_infer(
     )
     if cameras_txt is not None and images_txt is not None:
         poses = parse_cam_and_img_txt(cameras_txt_path=cameras_txt, images_txt_path=images_txt)
-        poses = poses[::-1]
-        scene.preset_pose(poses, pose_msk=None)
+        if len(poses) == 3:
+            poses = poses[::-1]
+        scene.preset_pose(poses, pose_msk=None)git
         loss = compute_global_alignment(
             scene=scene,
             init="mst",

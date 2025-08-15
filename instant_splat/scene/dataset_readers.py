@@ -217,7 +217,23 @@ def fetchPly(path):
     positions = np.vstack([vertices["x"], vertices["y"], vertices["z"]]).T
     colors = np.vstack([vertices["red"], vertices["green"], vertices["blue"]]).T / 255.0
     normals = np.vstack([vertices["nx"], vertices["ny"], vertices["nz"]]).T
+    # Save as COLMAP-compatible points3D.txt alongside the ply
+    txt_path = str(path).replace('.ply', '.txt')
+    try:
+        with open(txt_path, 'w') as f:
+            # Write header as in COLMAP points3D.txt
+            f.write("# 3D point list with one line per point: POINT_ID, X, Y, Z, R, G, B\n")
+            f.write("# Number of points: {}\n".format(positions.shape[0]))
+            for i in range(positions.shape[0]):
+                # COLMAP format: POINT_ID X Y Z R G B (no error/track fields)
+                x, y, z = positions[i]
+                r, g, b = (colors[i] * 255).astype(int)
+                f.write(f"{i+1} {x} {y} {z} {r} {g} {b}\n")
+    except Exception as e:
+        print(f"Error saving txt point cloud in fetchPly: {e}")
+
     return BasicPointCloud(points=positions, colors=colors, normals=normals)
+
 
 
 def storePly(path, xyz, rgb):
